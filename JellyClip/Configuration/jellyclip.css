@@ -1,0 +1,117 @@
+/*
+ * JellyClip - in-player clip UI styles for Jellyfin web.
+ *
+ * The bar is mounted on document.body with a very high z-index so it sits above
+ * Jellyfin's full-screen OSD layer (which otherwise swallows pointer events).
+ */
+#jellyclip-ui {
+    position: fixed;
+    top: 4.6em;
+    right: 1em;
+    z-index: 2147483000;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35em;
+    align-items: stretch;
+    padding: 0.55em 0.7em;
+    max-width: 18em;
+    background: rgba(20, 20, 20, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 0.5em;
+    box-shadow: 0 0.2em 1.2em rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(3px);
+    font-family: inherit;
+    color: #eee;
+    box-sizing: border-box;
+    pointer-events: auto;
+    text-align: left;
+}
+
+#jellyclip-ui.jellyclip-hidden {
+    display: none;
+}
+
+#jellyclip-ui .jellyclip-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+#jellyclip-ui .jellyclip-label {
+    font-size: 0.72em;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    opacity: 0.75;
+}
+
+#jellyclip-ui button {
+    background: #2a2a2a;
+    color: #ffffff;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 0.3em;
+    padding: 0.35em 0.6em;
+    font-size: 0.85em;
+    cursor: pointer;
+    text-align: center;
+    pointer-events: auto;
+}
+
+#jellyclip-ui button:hover:enabled {
+    background: #3a3a3a;
+}
+
+#jellyclip-ui button.jellyclip-active {
+    border-color: #00a4dc;
+    background: #12536b;
+}
+
+#jellyclip-ui button.jellyclip-download {
+    background: #007a6b;
+    border-color: transparent;
+    font-weight: 600;
+}
+
+#jellyclip-ui button:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+#jellyclip-ui button.jellyclip-close {
+    background: transparent;
+    border: none;
+    font-size: 1.1em;
+    padding: 0 0.2em;
+    line-height: 1;
+    color: #ccc;
+}
+
+#jellyclip-ui button.jellyclip-close:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.1);
+}
+
+#jellyclip-ui .jellyclip-range {
+    font-size: 0.8em;
+    font-variant-numeric: tabular-nums;
+    opacity: 0.9;
+    word-break: break-word;
+}
+
+#jellyclip-ui .jellyclip-status {
+    font-size: 0.72em;
+    color: #ffd54f;
+    min-height: 1.1em;
+    word-break: break-word;
+}
+
+#jellyclip-ui .jellyclip-status-error {
+    color: #ff8a80;
+}
+
+#jellyclip-ui .jellyclip-retry {
+    color: #69f0ae;
+    font-weight: 600;
+    text-decoration: underline;
+    cursor: pointer;
+    word-break: break-word;
+}

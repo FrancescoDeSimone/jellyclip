@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+    </head>
+
+    <body>
+        <div id="JellyClipConfigPage" data-role="page" class="page type-interior pluginConfigurationPage">
+            <div data-role="content" class="content-primary">
+                <div style="max-width: 44em;">
+                    <h1>JellyClip</h1>
+                    <p>Creates clips from a video that is currently playing in the web client.</p>
+                    <ol>
+                        <li>Play a video, then use the <b>Set start</b> / <b>Set end</b> / <b>Download clip</b>
+                            buttons in the top-right corner of the player.</li>
+                        <li>The clip is cut server-side with ffmpeg and downloaded to your browser.</li>
+                    </ol>
+                    <p>
+                        The clip UI is injected into the web client automatically when the server starts.
+                        If the web client was upgraded or the tags were removed, re-inject them below.
+                    </p>
+
+                    <div style="display: flex; gap: 0.8em; flex-wrap: wrap; align-items: center;">
+                        <button id="btnInject" class="raised" type="button">Inject clip UI</button>
+                        <button id="btnRemove" type="button">Remove clip UI</button>
+                        <span id="status" style="font-weight: 600;"></span>
+                    </div>
+                </div>
+            </div>
+            <script>
+                (function () {
+                    "use strict";
+
+                    var statusEl = document.getElementById("status");
+
+                    function setStatus(text, isError) {
+                        statusEl.textContent = text;
+                        statusEl.style.color = isError ? "#c62828" : "#2e7d32";
+                    }
+
+                    function apiUrl(path, method) {
+                        var client = window.ApiClient;
+                        if (!client) {
+                            setStatus("API client not available.", true);
+                            return null;
+                        }
+                        return fetch(client.getUrl(path, { api_key: client.accessToken() }), {
+                            method: method,
+                            credentials: "include"
+                        });
+                    }
+
+                    // The server returns the underlying reason (e.g. a read-only web
+                    // directory) as the response body; surface it instead of a generic error.
+                    function showFailure(prefix, error) {
+                        var detail = "";
+                        try {
+                            detail = (error && error.message) ? " - " + error.message : "";
+                        } catch (e) {
+                            detail = "";
+                        }
+                        setStatus(prefix + detail, true);
+                    }
+
+                    function refresh() {
+                        apiUrl("JellyClip/Status", "GET")
+                            .then(function (response) { return response.json(); })
+                            .then(function (state) {
+                                if (state.injected) {
+                                    setStatus("Injected. Hard-refresh the web app to apply.");
+                                } else {
+                                    setStatus("Not injected.", true);
+                                }
+                            })
+                            .catch(function (e) { showFailure("Status check failed.", e); });
+                    }
+
+                    function post(path, okMessage) {
+                        return apiUrl(path, "POST")
+                            .then(function (response) {
+                                if (!response.ok) {
+                                    return response.text().then(function (body) {
+                                        throw new Error((body || response.statusText || ("HTTP " + response.status)).trim());
+                                    });
+                                }
+                                setStatus(okMessage);
+                            });
+                    }
+
+                    document.getElementById("btnInject").addEventListener("click", function () {
+                        post("JellyClip/Inject", "Injected. Hard-refresh the web app to apply.")
+                            .catch(function (e) { showFailure("Injection failed.", e); });
+                    });
+
+                    document.getElementById("btnRemove").addEventListener("click", function () {
+                        post("JellyClip/Remove", "Removed.")
+                            .catch(function (e) { showFailure("Removal failed.", e); });
+                    });
+
+                    refresh();
+                })();
+            </script>
+        </div>
+    </body>
+</html>
