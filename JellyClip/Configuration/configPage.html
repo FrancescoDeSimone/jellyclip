@@ -20,10 +20,24 @@
                         If the web client was upgraded or the tags were removed, re-inject them below.
                     </p>
 
-                    <div style="display: flex; gap: 0.8em; flex-wrap: wrap; align-items: center;">
+                    <div style="display: flex; gap: 0.8em; flex-wrap: wrap; align-items: center; margin-bottom: 1.4em;">
                         <button id="btnInject" class="raised" type="button">Inject clip UI</button>
                         <button id="btnRemove" type="button">Remove clip UI</button>
                         <span id="status" style="font-weight: 600;"></span>
+                    </div>
+
+                    <h2 style="margin: 0 0 0.4em;">ffmpeg settings</h2>
+                    <div class="fieldDescription" style="margin-bottom: 0.6em;">
+                        Custom encoder arguments for clips. Leave empty for the built-in defaults
+                        (<code>-c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -c:a aac -b:a 128k -ac 2 -movflags +faststart</code>).
+                        Use <code>{START}</code> and <code>{DURATION}</code> placeholders if you need the clip times.
+                        The input file, audio stream mapping and output file are always appended automatically.
+                    </div>
+                    <textarea id="txtFfmpegArgs" class="textarea-mono" style="width: 100%; min-height: 5.5em; box-sizing: border-box;"
+                        placeholder="-c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -c:a aac -b:a 128k -ac 2 -movflags +faststart"></textarea>
+                    <div style="display: flex; gap: 0.8em; align-items: center; margin-top: 0.6em;">
+                        <button id="btnSaveFfmpeg" class="raised" type="button">Save ffmpeg settings</button>
+                        <span id="ffmpegStatus" style="font-weight: 600;"></span>
                     </div>
                 </div>
             </div>
@@ -95,6 +109,47 @@
                     document.getElementById("btnRemove").addEventListener("click", function () {
                         post("JellyClip/Remove", "Removed.")
                             .catch(function (e) { showFailure("Removal failed.", e); });
+                    });
+
+                    // ---- ffmpeg settings ----
+                    // Saved through the standard plugin configuration API.
+                    var JELLYCLIP_PLUGIN_ID = "6942adc5-8b2f-4a7d-9c3e-51d8e0f6a4b7";
+                    var ffmpegArgsInput = document.getElementById("txtFfmpegArgs");
+                    var ffmpegStatus = document.getElementById("ffmpegStatus");
+
+                    function setFfmpegStatus(text, isError) {
+                        ffmpegStatus.textContent = text || "";
+                        ffmpegStatus.style.color = isError ? "#c62828" : "#2e7d32";
+                    }
+
+                    function getClient() {
+                        return window.ApiClient;
+                    }
+
+                    // Load current value on page open so the box reflects the saved setting.
+                    try {
+                        getClient().getPluginConfiguration(JELLYCLIP_PLUGIN_ID)
+                            .then(function (cfg) {
+                                if (cfg && Object.prototype.hasOwnProperty.call(cfg, "FfmpegArgumentsTemplate")) {
+                                    ffmpegArgsInput.value = cfg.FfmpegArgumentsTemplate || "";
+                                }
+                            })
+                            .catch(function () { /* API unavailable; keep the placeholder */ });
+                    } catch (e) { /* older API client */ }
+
+                    document.getElementById("btnSaveFfmpeg").addEventListener("click", function () {
+                        var value = ffmpegArgsInput.value.trim();
+                        getClient().getPluginConfiguration(JELLYCLIP_PLUGIN_ID)
+                            .then(function (cfg) {
+                                cfg.FfmpegArgumentsTemplate = value;
+                                return getClient().updatePluginConfiguration(JELLYCLIP_PLUGIN_ID, cfg);
+                            })
+                            .then(function () {
+                                setFfmpegStatus(value ? "Saved. Applies to the next clip." : "Saved (built-in defaults).");
+                            })
+                            .catch(function (e) {
+                                setFfmpegStatus("Save failed: " + (e && e.message ? e.message : e), true);
+                            });
                     });
 
                     refresh();

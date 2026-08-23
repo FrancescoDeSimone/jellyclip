@@ -21,4 +21,11 @@ public class PluginConfiguration : BasePluginConfiguration
     /// from the web client when the server shuts down.
     /// </summary>
     public bool RemoveWebUiOnShutdown { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets the optional custom ffmpeg argument template used to encode clips.
+    /// Leave empty to use the built-in defaults. Two placeholders are supported:
+    /// <c>{START}</c> and <c>{DURATION}</c> (input, audio map and output are appended).
+    /// </summary>
+    public string FfmpegArgumentsTemplate { get; set; } = string.Empty;
 }

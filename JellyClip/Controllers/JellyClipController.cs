@@ -5,6 +5,7 @@ using System.Globalization;
 using JellyClip.Services;
 using MediaBrowser.Common.Api;
 using MediaBrowser.Controller.Entities;
+using MediaBrowser.Model.Entities;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -42,6 +43,7 @@ public sealed class JellyClipController : ControllerBase
     /// <param name="itemId">Identifier of the video item to clip.</param>
     /// <param name="startSeconds">Clip start in seconds.</param>
     /// <param name="endSeconds">Clip end in seconds.</param>
+    /// <param name="audioStreamIndex">Absolute audio stream index, or <c>null</c> for the default audio track.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <response code="200">Clip generated.</response>
     /// <response code="400">Invalid item or time range.</response>
@@ -51,9 +53,9 @@ public sealed class JellyClipController : ControllerBase
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult> GetClip(string itemId, double startSeconds, double endSeconds, CancellationToken cancellationToken)
+    public async Task<ActionResult> GetClip(string itemId, double startSeconds, double endSeconds, int? audioStreamIndex, CancellationToken cancellationToken)
     {
-        _logger.LogInformation("Clip requested: item {ItemId}, start {StartSeconds}s, end {EndSeconds}s", itemId, startSeconds, endSeconds);
+        _logger.LogInformation("Clip requested: item {ItemId}, start {StartSeconds}s, end {EndSeconds}s, audio {AudioStreamIndex}", itemId, startSeconds, endSeconds, audioStreamIndex);
 
         if (!TryValidateRange(startSeconds, endSeconds, out string rangeError))
         {
@@ -65,9 +67,14 @@ public sealed class JellyClipController : ControllerBase
             return NotFound(resolveError);
         }
 
+        if (!IsValidAudioStream(video, audioStreamIndex, out string audioError))
+        {
+            return BadRequest(audioError);
+        }
+
         try
         {
-            string clipPath = await _clipService.CreateClipAsync(video, startSeconds, endSeconds, cancellationToken).ConfigureAwait(false);
+            string clipPath = await _clipService.CreateClipAsync(video, startSeconds, endSeconds, audioStreamIndex, cancellationToken).ConfigureAwait(false);
             string fileName = Path.GetFileName(clipPath);
 
             // Remove the clip once it has been streamed to the client.
@@ -94,15 +101,16 @@ public sealed class JellyClipController : ControllerBase
     /// <param name="itemId">Identifier of the video item to clip.</param>
     /// <param name="startSeconds">Clip start in seconds.</param>
     /// <param name="endSeconds">Clip end in seconds.</param>
+    /// <param name="audioStreamIndex">Absolute audio stream index, or <c>null</c> for the default audio track.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <response code="200">Clip created.</response>
     /// <response code="400">Invalid item or time range.</response>
     /// <response code="404">Item not found.</response>
     [HttpPost("{itemId}")]
     [Authorize(Policy = Policies.Download)]
-    public async Task<ActionResult> CreateClip(string itemId, double startSeconds, double endSeconds, CancellationToken cancellationToken)
+    public async Task<ActionResult> CreateClip(string itemId, double startSeconds, double endSeconds, int? audioStreamIndex, CancellationToken cancellationToken)
     {
-        _logger.LogInformation("Clip create requested: item {ItemId}, start {StartSeconds}s, end {EndSeconds}s", itemId, startSeconds, endSeconds);
+        _logger.LogInformation("Clip create requested: item {ItemId}, start {StartSeconds}s, end {EndSeconds}s, audio {AudioStreamIndex}", itemId, startSeconds, endSeconds, audioStreamIndex);
 
         if (!TryValidateRange(startSeconds, endSeconds, out string rangeError))
         {
@@ -114,9 +122,14 @@ public sealed class JellyClipController : ControllerBase
             return NotFound(resolveError);
         }
 
+        if (!IsValidAudioStream(video, audioStreamIndex, out string audioError))
+        {
+            return BadRequest(audioError);
+        }
+
         try
         {
-            string clipPath = await _clipService.CreateClipAsync(video, startSeconds, endSeconds, cancellationToken).ConfigureAwait(false);
+            string clipPath = await _clipService.CreateClipAsync(video, startSeconds, endSeconds, audioStreamIndex, cancellationToken).ConfigureAwait(false);
             var info = new FileInfo(clipPath);
             return Ok(new { filename = Path.GetFileName(clipPath), size = info.Length });
         }
@@ -231,6 +244,24 @@ public sealed class JellyClipController : ControllerBase
         if (start < 0 || end <= start)
         {
             error = "The end time must be after the start time, and both must be non-negative.";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsValidAudioStream(Video video, int? audioStreamIndex, out string error)
+    {
+        error = string.Empty;
+
+        if (audioStreamIndex is null)
+        {
+            return true;
+        }
+
+        if (!video.GetMediaStreams().Any(m => m.Type == MediaStreamType.Audio && m.Index == audioStreamIndex.Value))
+        {
+            error = "The selected audio track was not found.";
             return false;
         }
 

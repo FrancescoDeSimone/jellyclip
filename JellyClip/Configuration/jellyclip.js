@@ -4,13 +4,11 @@
  * Loaded via the JellyClip plugin's `web/ConfigurationPage?name=jellyclip.js`
  * resource, which the server plugin injects into the web client's index.html.
  *
- * Shows a small toolbar over the video while it plays and lets the user mark a
- * start and end time, then downloads the cut clip from the server.
- *
- * The bar is mounted on document.body (not inside the player dialog) with a
- * very high z-index so Jellyfin's full-screen OSD layer cannot swallow its
- * clicks. It auto-hides after a few seconds of mouse inactivity and reappears
- * on mouse movement, mirroring the built-in OSD behaviour.
+ * A scissors icon is injected into the player's top bar (next to the cast /
+ * share buttons) and hides together with the rest of the bar. Hovering or
+ * tapping it opens the clip panel (set start / set end / download). The panel
+ * is mounted on document.body with a very high z-index so Jellyfin's
+ * full-screen OSD layer cannot swallow its clicks.
  */
 (function () {
     "use strict";
@@ -111,15 +109,15 @@
 
     // ------------------------------------------------------------ DOM state
     var UI_ID = "jellyclip-ui";
-    var IDLE_HIDE_MS = 3000;
+    var PANEL_ID = "jellyclip-panel";
 
     var state = {
         start: null,
-        end: null
+        end: null,
+        audioStreamIndex: null
     };
 
-    var idleTimer = null;
-    var hiddenByUser = false;
+    var hideTimer = null;
 
     function getContainer() {
         return document.querySelector(".videoPlayerContainer");
@@ -133,41 +131,13 @@
         return document.getElementById(UI_ID);
     }
 
-    function hideBar() {
-        var el = getBar();
-        if (el) {
-            el.classList.add("jellyclip-hidden");
-        }
+    function getOsdHeader() {
+        return document.querySelector(".osdHeader") || document.querySelector("[class*=\"osdHeader\"]");
     }
 
-    function showBar() {
-        if (hiddenByUser) {
-            return;
-        }
-        var el = getBar();
-        if (el) {
-            el.classList.remove("jellyclip-hidden");
-        }
-    }
-
-    function armIdleHide() {
-        clearTimeout(idleTimer);
-        idleTimer = setTimeout(hideBar, IDLE_HIDE_MS);
-    }
-
-    function onMouseMove() {
-        showBar();
-        armIdleHide();
-    }
-
-    function onVideoPause() {
-        // Keep the bar visible while paused so it can be used.
-        showBar();
-        clearTimeout(idleTimer);
-    }
-
-    function onVideoPlay() {
-        armIdleHide();
+    function getHeaderRight() {
+        var osd = getOsdHeader();
+        return osd ? osd.querySelector(".headerRight") : null;
     }
 
     function setStatus(root, text, isError) {
@@ -190,25 +160,30 @@
             return;
         }
 
-        if (state.start === null && state.end === null) {
-            el.textContent = "No range selected";
+        if (state.start !== null && state.end !== null && state.end > state.start) {
+            el.textContent = "Duration: " + formatDuration(state.end - state.start);
+        } else if (state.start !== null) {
+            el.textContent = "Start only: " + formatTime(state.start);
+        } else if (state.end !== null) {
+            el.textContent = "End only: " + formatTime(state.end);
+        } else {
+            el.textContent = "";
+        }
+    }
+
+    // Do not overwrite an input the user is actively editing.
+    function setInputValue(input, value) {
+        if (!input || document.activeElement === input) {
             return;
         }
-
-        var pieces = [];
-        if (state.start !== null) {
-            pieces.push("from " + formatTime(state.start));
-        }
-        if (state.end !== null) {
-            pieces.push("to " + formatTime(state.end));
-        }
-        el.textContent = pieces.join(" ") + (state.start !== null && state.end !== null
-            ? " (" + formatDuration(state.end - state.start) + ")"
-            : "");
+        input.value = (value === null || value === undefined) ? "" : value;
     }
 
     function syncUi(root) {
         updateRangeText(root);
+        setInputValue(root.querySelector(".jellyclip-start-input"), state.start);
+        setInputValue(root.querySelector(".jellyclip-end-input"), state.end);
+
         var download = root.querySelector(".jellyclip-download");
         if (download) {
             download.disabled = !(state.start !== null && state.end !== null && state.end > state.start);
@@ -222,6 +197,67 @@
         if (endBtn) {
             endBtn.classList.toggle("jellyclip-active", state.end !== null);
         }
+    }
+
+    function populateAudioTracks(select, video) {
+        if (select.__populated) {
+            return;
+        }
+        select.__populated = true;
+
+        var api = getApiClient();
+        if (!api) {
+            return;
+        }
+
+        var token = api.accessToken ? api.accessToken() : "";
+        getPlayingItemId(api, token, video).then(function (itemId) {
+            if (!itemId) {
+                return null;
+            }
+
+            var userId = (typeof api.getCurrentUserId === "function") ? api.getCurrentUserId() : "";
+            var url = api.getUrl("Users/" + userId + "/Items/" + itemId, {
+                Fields: "MediaStreams",
+                api_key: token
+            });
+            return fetch(url, {
+                method: "GET",
+                credentials: "include",
+                headers: {
+                    "X-Emby-Token": token
+                }
+            });
+        }).then(function (response) {
+            if (!response || !response.ok) {
+                return null;
+            }
+            return response.json();
+        }).then(function (item) {
+            if (!item || !Array.isArray(item.MediaStreams)) {
+                return;
+            }
+
+            var audios = item.MediaStreams.filter(function (s) {
+                return s && s.Type === "Audio";
+            });
+            if (audios.length === 0) {
+                return;
+            }
+
+            while (select.options.length > 1) {
+                select.remove(1);
+            }
+            audios.forEach(function (s) {
+                var option = document.createElement("option");
+                option.value = s.Index;
+                var name = s.DisplayTitle || s.Language || s.Codec || ("track " + s.Index);
+                option.textContent = (s.Codec ? s.Codec + " \u00b7 " : "") + name + (s.Channels ? " \u00b7 " + s.Channels + "ch" : "");
+                select.appendChild(option);
+            });
+        }).catch(function () {
+            // Leave the Default option only.
+        });
     }
 
     function getPlayingItemId(api, token, video) {
@@ -323,17 +359,21 @@
                 return null;
             }
 
-            var createUrl = api.getUrl("JellyClip/" + itemId, {
+            var params = {
                 startSeconds: state.start,
                 endSeconds: state.end,
                 api_key: token
-            });
+            };
+            if (state.audioStreamIndex !== null && state.audioStreamIndex !== undefined) {
+                params.audioStreamIndex = state.audioStreamIndex;
+            }
+            var createUrl = api.getUrl("JellyClip/" + itemId, params);
 
             setStatus(root, "Generating clip\u2026 this can take a while.");
 
             // Create the clip with a lightweight POST (no body streamed). Failures
-            // are visible; on success we download via a native top-level navigation,
-            // which every browser auto-downloads (no blob / activation quirks).
+            // are visible; on success we download via a hidden iframe, which every
+            // browser auto-downloads without leaving the player.
             return fetch(createUrl, {
                 method: "POST",
                 credentials: "include",
@@ -382,30 +422,60 @@
         });
     }
 
-    function buildControls(video) {
-        var root = document.createElement("div");
-        root.id = UI_ID;
-        root.className = UI_ID;
+    // ------------------------------------------------------------- panel UX
+    function positionPanel(icon, panel) {
+        var rect = icon.getBoundingClientRect();
+        var width = 240;
+        var left = Math.min(Math.max(8, rect.right - width), window.innerWidth - width - 8);
+        panel.style.left = left + "px";
+        panel.style.top = (rect.bottom + 8) + "px";
+    }
 
-        var header = document.createElement("div");
-        header.className = "jellyclip-header";
-        var label = document.createElement("span");
-        label.className = "jellyclip-label";
-        label.textContent = "Clip";
-        var close = document.createElement("button");
-        close.type = "button";
-        close.className = "jellyclip-close";
-        close.textContent = "\u00d7";
-        close.title = "Hide clip toolbar for this playback";
-        close.addEventListener("click", function (event) {
-            event.preventDefault();
-            event.stopPropagation();
-            hiddenByUser = true;
-            hideBar();
-        });
-        header.appendChild(label);
-        header.appendChild(close);
-        root.appendChild(header);
+    function hidePanel(panel, icon) {
+        if (icon && icon.__pinned) {
+            return;
+        }
+        clearTimeout(hideTimer);
+        hideTimer = setTimeout(function () {
+            panel.style.display = "none";
+        }, 250);
+    }
+
+    function showPanel(icon, panel) {
+        clearTimeout(hideTimer);
+        positionPanel(icon, panel);
+        panel.style.display = "flex";
+    }
+
+    function buildTimeField(cls, title) {
+        var wrap = document.createElement("label");
+        wrap.className = "jellyclip-field";
+        var input = document.createElement("input");
+        input.type = "number";
+        input.min = "0";
+        input.step = "1";
+        input.className = cls;
+        input.placeholder = "seconds";
+        input.title = title;
+        wrap.appendChild(input);
+        return { wrap: wrap, input: input };
+    }
+
+    function buildIconAndPanel(video) {
+        var icon = document.createElement("button");
+        icon.type = "button";
+        icon.setAttribute("is", "paper-icon-button-light");
+        icon.id = UI_ID;
+        icon.className = "headerButton headerButtonRight paper-icon-button-light jellyclip-header-icon";
+        icon.title = "Clip";
+        // Inline SVG: independent of the Material Icons font/ligatures, so it
+        // renders identically under any theme.
+        icon.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M9.64 7.64c.23-.5.36-1.05.36-1.64 0-2.21-1.79-4-4-4S2 3.79 2 6s1.79 4 4 4c.59 0 1.14-.13 1.64-.36L10 12l-2.36 2.36C7.14 14.13 6.59 14 6 14c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4c0-.59-.13-1.14-.36-1.64L12 14l7 7h3v-1L9.64 7.64zM6 8c-1.1 0-2-.89-2-2s.9-2 2-2 2 .89 2 2-.9 2-2 2zm0 12c-1.1 0-2-.89-2-2s.9-2 2-2 2 .89 2 2-.9 2-2 2zm6-7.5c-.28 0-.5-.22-.5-.5s.22-.5.5-.5.5.22.5.5-.22.5-.5.5zM19 3l-6 6 2 2 7-7V3z" fill="currentColor"/></svg>';
+        icon.__pinned = false;
+
+        var panel = document.createElement("div");
+        panel.id = PANEL_ID;
+        panel.className = "jellyclip-panel";
 
         var start = document.createElement("button");
         start.type = "button";
@@ -415,8 +485,8 @@
             event.preventDefault();
             event.stopPropagation();
             state.start = video.currentTime;
-            setStatus(root, "");
-            syncUi(root);
+            setStatus(panel, "");
+            syncUi(panel);
         });
 
         var end = document.createElement("button");
@@ -427,12 +497,53 @@
             event.preventDefault();
             event.stopPropagation();
             state.end = video.currentTime;
-            setStatus(root, "");
-            syncUi(root);
+            setStatus(panel, "");
+            syncUi(panel);
         });
 
         var range = document.createElement("span");
         range.className = "jellyclip-range";
+
+        // Audio track selection (populated asynchronously from the item).
+        var audioRow = document.createElement("label");
+        audioRow.className = "jellyclip-audio";
+        var audioLabel = document.createElement("span");
+        audioLabel.className = "jellyclip-audio-label";
+        audioLabel.textContent = "Audio";
+        var audioSelect = document.createElement("select");
+        audioSelect.className = "jellyclip-audio-select";
+        audioSelect.title = "Audio track";
+        var defaultOption = document.createElement("option");
+        defaultOption.value = "";
+        defaultOption.textContent = "Default";
+        audioSelect.appendChild(defaultOption);
+        audioSelect.addEventListener("change", function () {
+            state.audioStreamIndex = audioSelect.value === "" ? null : Number(audioSelect.value);
+        });
+        audioRow.appendChild(audioLabel);
+        audioRow.appendChild(audioSelect);
+
+        // Editable start/end in seconds (typing or arrow keys adjust them).
+        var timeRow = document.createElement("div");
+        timeRow.className = "jellyclip-time-row";
+
+        var startField = buildTimeField("jellyclip-start-input", "Clip start (seconds)");
+        var endField = buildTimeField("jellyclip-end-input", "Clip end (seconds)");
+
+        function applyTimeFromInputs() {
+            var s = parseFloat(startField.input.value);
+            var e = parseFloat(endField.input.value);
+            state.start = (isNaN(s) || s < 0) ? null : s;
+            state.end = (isNaN(e) || e < 0) ? null : e;
+            syncUi(panel);
+        }
+        startField.input.addEventListener("input", applyTimeFromInputs);
+        startField.input.addEventListener("change", applyTimeFromInputs);
+        endField.input.addEventListener("input", applyTimeFromInputs);
+        endField.input.addEventListener("change", applyTimeFromInputs);
+
+        timeRow.appendChild(startField.wrap);
+        timeRow.appendChild(endField.wrap);
 
         var clear = document.createElement("button");
         clear.type = "button";
@@ -441,7 +552,7 @@
         clear.addEventListener("click", function (event) {
             event.preventDefault();
             event.stopPropagation();
-            clearSelection(root);
+            clearSelection(panel);
         });
 
         var download = document.createElement("button");
@@ -451,73 +562,119 @@
         download.addEventListener("click", function (event) {
             event.preventDefault();
             event.stopPropagation();
-            downloadClip(root, video);
+            downloadClip(panel, video);
         });
 
         var status = document.createElement("span");
         status.className = "jellyclip-status";
 
-        root.appendChild(start);
-        root.appendChild(end);
-        root.appendChild(range);
-        root.appendChild(clear);
-        root.appendChild(download);
-        root.appendChild(status);
+        panel.appendChild(audioRow);
+        panel.appendChild(timeRow);
+        panel.appendChild(range);
+        panel.appendChild(start);
+        panel.appendChild(end);
+        panel.appendChild(clear);
+        panel.appendChild(download);
+        panel.appendChild(status);
 
-        syncUi(root);
-        return root;
+        syncUi(panel);
+
+        icon.addEventListener("mouseenter", function () {
+            populateAudioTracks(audioSelect, video);
+            showPanel(icon, panel);
+        });
+        icon.addEventListener("mouseleave", function () {
+            hidePanel(panel, icon);
+        });
+        panel.addEventListener("mouseenter", function () {
+            clearTimeout(hideTimer);
+            populateAudioTracks(audioSelect, video);
+        });
+        panel.addEventListener("mouseleave", function () {
+            hidePanel(panel, icon);
+        });
+        icon.addEventListener("click", function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            icon.__pinned = !icon.__pinned;
+            if (icon.__pinned) {
+                showPanel(icon, panel);
+            } else {
+                hidePanel(panel, icon);
+            }
+        });
+
+        return { icon: icon, panel: panel };
+    }
+
+    function teardown(bar) {
+        if (bar) {
+            if (bar.parentNode) {
+                bar.parentNode.removeChild(bar);
+            }
+            if (bar.__panel && bar.__panel.parentNode) {
+                bar.__panel.parentNode.removeChild(bar.__panel);
+            }
+        }
+    }
+
+    // The icon lives inside the OSD header, so it hides with the rest of the
+    // bar. The body-mounted panel must follow: whenever the header is hidden
+    // (mouse idle), close the panel too.
+    function syncPanelWithHeader() {
+        var bar = getBar();
+        if (!bar || !bar.__panel) {
+            return;
+        }
+
+        var header = getOsdHeader();
+        var hidden = !header || header.classList.contains("osdHeader-hidden")
+            || (getComputedStyle(header).opacity === "0");
+        if (hidden && bar.__panel.style.display !== "none") {
+            bar.__pinned = false;
+            bar.__panel.style.display = "none";
+        }
     }
 
     function mountIfNeeded() {
         var container = getContainer();
+        var headerRight = getHeaderRight();
         var bar = getBar();
 
-        if (!container) {
-            // Playback ended; tear down the bar and reset user-hide for next time.
-            hiddenByUser = false;
-            if (bar) {
-                document.body.removeChild(bar);
-                clearTimeout(idleTimer);
-            }
+        if (!container || !headerRight) {
+            // Playback ended (or header not rendered yet); tear down leftovers.
+            teardown(bar);
             return;
         }
 
         if (bar && bar.__container === container) {
-            // Already mounted for this player dialog; nothing to do.
+            // Already mounted for this player dialog; ensure it is inside the header.
+            if (bar.parentNode !== headerRight) {
+                headerRight.appendChild(bar);
+            }
             return;
         }
 
-        // A bar from a previous (now closed) player dialog.
-        if (bar) {
-            document.body.removeChild(bar);
-            clearTimeout(idleTimer);
-        }
+        teardown(bar);
 
         var video = container.querySelector("video");
         if (!video) {
             return;
         }
 
-        hiddenByUser = false;
-        bar = buildControls(video);
-        bar.__container = container;
-        document.body.appendChild(bar);
-
-        video.addEventListener("pause", onVideoPause);
-        video.addEventListener("play", onVideoPlay);
-
-        // Appear immediately at playback start, then hide on inactivity.
-        showBar();
-        armIdleHide();
+        var built = buildIconAndPanel(video);
+        built.icon.__container = container;
+        built.icon.__panel = built.panel;
+        headerRight.appendChild(built.icon);
+        document.body.appendChild(built.panel);
     }
 
     // -------------------------------------------------------------- startup
-    window.addEventListener("mousemove", onMouseMove);
-
     mountIfNeeded();
+    setInterval(syncPanelWithHeader, 500);
 
-    // Jellyfin recreates the player dialog for each playback session, so keep
-    // watching the document tree and re-attach the bar when a fresh dialog appears.
+    // Jellyfin recreates the player dialog and OSD for each playback session, so
+    // keep watching the document tree and re-attach the icon when it reappears.
     var observer = new MutationObserver(mountIfNeeded);
     observer.observe(document.body, { childList: true, subtree: true });
 })();
