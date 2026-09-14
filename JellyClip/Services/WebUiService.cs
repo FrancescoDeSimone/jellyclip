@@ -27,6 +27,31 @@ public sealed class WebUiService
     private const string StyleTag = "<link rel=\"stylesheet\" href=\"configurationpage?name=jellyclip.css\">";
     private const string ScriptTag = "<script src=\"configurationpage?name=jellyclip.js\"></script>";
 
+    /// <summary>
+    /// Cache-busting query appended to injected tags so browsers and service
+    /// workers fetch the current files after plugin updates. Must match the
+    /// tags seeded at build time (see nix-conf jellyfin.nix).
+    /// </summary>
+    private static string VersionQuery =>
+        "?v=" + (typeof(WebUiService).Assembly.GetName().Version?.ToString() ?? "0.0.0.0");
+
+    private static string VersionedTag(string tag)
+    {
+        int q = tag.IndexOf('?');
+        if (q < 0)
+        {
+            return tag;
+        }
+
+        int end = tag.IndexOf('"', q);
+        if (end < 0)
+        {
+            return tag;
+        }
+
+        return tag.Substring(0, end) + "&" + VersionQuery.TrimStart('?') + tag.Substring(end);
+    }
+
     private readonly IApplicationPaths _applicationPaths;
     private readonly ILogger<WebUiService> _logger;
 
@@ -81,7 +106,7 @@ public sealed class WebUiService
         string html = File.ReadAllText(path);
         RemoveMarkedBlock(ref html);
 
-        string block = string.Join(Environment.NewLine, StartMarker, StyleTag, ScriptTag, EndMarker);
+        string block = string.Join(Environment.NewLine, StartMarker, VersionedTag(StyleTag), VersionedTag(ScriptTag), EndMarker);
         int bodyIndex = html.LastIndexOf("</body>", StringComparison.OrdinalIgnoreCase);
         html = bodyIndex >= 0
             ? html.Insert(bodyIndex, block + Environment.NewLine)
