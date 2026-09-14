@@ -201,33 +201,60 @@
     }
 
     function getHeaderRight() {
-        // Prefer a VISIBLE slot: hidden templates and other players'
-        // headers must not win. The video OSD is not necessarily inside
-        // .videoPlayerContainer, so search document-wide.
-        var i, el;
-        var rights = document.querySelectorAll(".headerRight");
-        for (i = 0; i < rights.length; i++) {
-            if (isVisible(rights[i])) {
-                return { parent: rights[i], sibling: null };
+        // Search scopes in order: the playing video's dialog first
+        // (hidden templates and other players must never win), then
+        // the whole document. Within a scope, prefer visible slots.
+        var scopes = [];
+        var container = getContainer();
+        if (container) {
+            var el = container;
+            while (el && el !== document.body) {
+                if (el.classList && (el.classList.contains("dialog")
+                        || el.getAttribute("role") === "dialog")) {
+                    scopes.push(el);
+                    break;
+                }
+                el = el.parentNode;
+            }
+            scopes.push(container);
+        }
+        scopes.push(document);
+        var i, s, list, el;
+        var fallback = null;
+        for (s = 0; s < scopes.length; s++) {
+            var scope = scopes[s];
+            list = scope.querySelectorAll(".headerRight");
+            for (i = 0; i < list.length; i++) {
+                el = list[i];
+                if (isVisible(el)) {
+                    return { parent: el, sibling: null };
+                }
+                if (!fallback) {
+                    fallback = { parent: el, sibling: null };
+                }
+            }
+            var anchors = scope.querySelectorAll(
+                ".btnVideoOsdSettings,.btnAirPlay,.btnChromecast");
+            for (i = 0; i < anchors.length; i++) {
+                el = anchors[i];
+                if (el.parentNode) {
+                    if (isVisible(el)) {
+                        return { parent: el.parentNode, sibling: el };
+                    }
+            if (!fallback) {
+                    fallback = { parent: el.parentNode, sibling: el };
+                }
             }
         }
-        var anchors = document.querySelectorAll(
-            ".btnVideoOsdSettings,.btnAirPlay,.btnChromecast");
-        for (i = 0; i < anchors.length; i++) {
-            el = anchors[i];
-            if (isVisible(el) && el.parentNode) {
-                return { parent: el.parentNode, sibling: el };
+        return fallback;
+    }
+                }
+            }
+            if (fallback && s === 0) {
+                break;
             }
         }
-        // Fallback: any present slot (may become visible later).
-        if (rights.length > 0) {
-            return { parent: rights[0], sibling: null };
-        }
-        if (anchors.length > 0 && anchors[0].parentNode) {
-            return { parent: anchors[0].parentNode,
-                     sibling: anchors[0] };
-        }
-        return null;
+        return fallback;
     }
 
     function getHeaderRight(container) {
