@@ -180,7 +180,20 @@
 
     function getHeaderRight() {
         var osd = getOsdHeader();
-        return osd ? osd.querySelector(".headerRight") : null;
+        var legacy = osd ? osd.querySelector(".headerRight") : null;
+        if (legacy) {
+            return { parent: legacy, sibling: null, css: null };
+        }
+        // Jellyfin 12 redesigned the video OSD (no .headerRight): anchor to
+        // a known top-right OSD button and inherit its styling.
+        var anchor = document.querySelector(".btnVideoOsdSettings")
+            || document.querySelector(".btnAirPlay")
+            || document.querySelector(".btnChromecast");
+        if (anchor && anchor.parentNode) {
+            return { parent: anchor.parentNode, sibling: anchor,
+                     css: anchor.className };
+        }
+        return null;
     }
 
     function setStatus(root, text, isError) {
@@ -512,12 +525,14 @@
         return { wrap: wrap, input: input };
     }
 
-    function buildIconAndPanel(video) {
+    function buildIconAndPanel(video, css) {
         var icon = document.createElement("button");
         icon.type = "button";
         icon.setAttribute("is", "paper-icon-button-light");
         icon.id = UI_ID;
-        icon.className = "headerButton headerButtonRight paper-icon-button-light jellyclip-header-icon";
+        icon.className = css
+            ? css + " jellyclip-header-icon"
+            : "headerButton headerButtonRight paper-icon-button-light jellyclip-header-icon";
         icon.title = "Clip";
         // Inline SVG: independent of the Material Icons font/ligatures, so it
         // renders identically under any theme.
@@ -689,10 +704,10 @@
 
     function mountIfNeeded() {
         var container = getContainer();
-        var headerRight = getHeaderRight();
+        var slot = getHeaderRight();
         var bar = getBar();
 
-        if (!container || !headerRight) {
+        if (!container || !slot) {
             // Playback ended (or header not rendered yet); tear down leftovers.
             teardown(bar);
             return;
@@ -700,8 +715,12 @@
 
         if (bar && bar.__container === container) {
             // Already mounted for this player dialog; ensure it is inside the header.
-            if (bar.parentNode !== headerRight) {
-                headerRight.appendChild(bar);
+            if (bar.parentNode !== slot.parent) {
+                if (slot.sibling) {
+                    slot.parent.insertBefore(bar, slot.sibling);
+                } else {
+                    slot.parent.appendChild(bar);
+                }
             }
             return;
         }
@@ -713,10 +732,14 @@
             return;
         }
 
-        var built = buildIconAndPanel(video);
+        var built = buildIconAndPanel(video, slot.css);
         built.icon.__container = container;
         built.icon.__panel = built.panel;
-        headerRight.appendChild(built.icon);
+        if (slot.sibling) {
+            slot.parent.insertBefore(built.icon, slot.sibling);
+        } else {
+            slot.parent.appendChild(built.icon);
+        }
         document.body.appendChild(built.panel);
     }
 
