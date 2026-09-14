@@ -144,14 +144,16 @@ public sealed class ClipService
     /// <exception cref="ClipException">Thrown when the clip could not be generated.</exception>
     public async Task<string> CreateClipAsync(Video video, double start, double end, int? audioStreamIndex, CancellationToken cancellationToken)
     {
-        PruneOldClips();
-
         string outputPath = GetClipPath(video, start, end, audioStreamIndex);
         if (File.Exists(outputPath))
         {
             // Cached clip (not yet downloaded or deleted): reuse it.
             return outputPath;
         }
+
+        var started = Stopwatch.StartNew();
+
+        PruneOldClips();
 
         try
         {
@@ -179,6 +181,8 @@ public sealed class ClipService
             TryDelete(outputPath);
             throw new ClipException("ffmpeg failed: " + ex.Message);
         }
+
+        _logger.LogInformation("Clip ready: {Path} ({Size} bytes in {Elapsed})", outputPath, new FileInfo(outputPath).Length, started.Elapsed);
 
         return outputPath;
     }

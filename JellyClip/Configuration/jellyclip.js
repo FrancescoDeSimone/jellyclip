@@ -338,7 +338,8 @@
 
         var download = root.querySelector(".jellyclip-download");
         if (download) {
-            download.disabled = !(state.start !== null && state.end !== null && state.end > state.start);
+            download.disabled = state.busy
+                || !(state.start !== null && state.end !== null && state.end > state.start);
         }
 
         var startBtn = root.querySelector(".jellyclip-start");
@@ -487,6 +488,16 @@
             link.href = objectUrl;
             link.download = downloadUrl.split("/").pop().split("?")[0] || "clip.mp4";
             document.body.appendChild(link);
+            // Jellyfin 12's player cancels programmatic clicks in Firefox/Edge:
+            // its capture-phase guard only lets clicks through whose target
+            // contains the last pointerdown element. Since link.click() never
+            // dispatches pointer events, seed the pointerdown on the anchor
+            // first - harmless on other browsers.
+            if (window.PointerEvent && typeof link.dispatchEvent === "function") {
+                link.dispatchEvent(new PointerEvent("pointerdown", {
+                    bubbles: true, cancelable: true, composed: true, button: 0
+                }));
+            }
             link.click();
             setTimeout(function () {
                 if (link.parentNode) {
@@ -503,13 +514,24 @@
     }
 
     function downloadClip(root, video) {
+        if (state.busy) {
+            return;
+        }
+        state.busy = true;
+        var button = root.querySelector(".jellyclip-download");
+        if (button) {
+            button.disabled = true;
+            button.style.opacity = "0.6";
+        }
         if (state.start === null || state.end === null || state.end <= state.start) {
+            endBusy(root);
             setStatus(root, "Select both a start and an end time first.");
             return;
         }
 
         var api = getApiClient();
         if (!api) {
+            endBusy(root);
             setStatus(root, "Jellyfin API client not available.");
             return;
         }
@@ -579,7 +601,18 @@
             });
         }).catch(function (err) {
             setStatus(root, "Clip failed: " + (err && err.message ? err.message : err), true);
+        }).then(function () {
+            endBusy(root);
         });
+    }
+
+    function endBusy(root) {
+        state.busy = false;
+        var b = root.querySelector(".jellyclip-download");
+        if (b) {
+            b.disabled = false;
+            b.style.opacity = "";
+        }
     }
 
     // ------------------------------------------------------------- panel UX

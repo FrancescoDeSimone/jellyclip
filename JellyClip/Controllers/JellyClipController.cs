@@ -163,8 +163,11 @@ public sealed class JellyClipController : ControllerBase
         string path = Path.Combine(_clipService.ClipDirectory, safe);
         if (!System.IO.File.Exists(path))
         {
+            _logger.LogInformation("Clip download missed: {Name} (recreated on demand)", safe);
             return NotFound("This clip is no longer available - create it again.");
         }
+
+        _logger.LogInformation("Clip download started: {Name} ({Size} bytes)", safe, new FileInfo(path).Length);
 
         HttpContext.Response.OnCompleted(() =>
         {
