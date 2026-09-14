@@ -241,40 +241,19 @@
                     if (isVisible(el)) {
                         return { parent: el.parentNode, sibling: el };
                     }
-            if (!fallback) {
-                    fallback = { parent: el.parentNode, sibling: el };
+                    if (!fallback) {
+                        fallback = { parent: el.parentNode, sibling: el };
+                    }
                 }
             }
-        }
-        return fallback;
-    }
-                }
-            }
+            // A slot inside the playing dialog wins even while the OSD is
+            // hidden (it appears with the bar); never let a hidden template
+            // elsewhere in the document shadow it.
             if (fallback && s === 0) {
                 break;
             }
         }
         return fallback;
-    }
-
-    function getHeaderRight(container) {
-        var scope = container || document;
-        var osd = getOsdHeader(container);
-        var legacy = osd
-            ? osd.querySelector(".headerRight")
-            : scope.querySelector(".headerRight");
-        if (legacy) {
-            return { parent: legacy, sibling: null };
-        }
-        // Jellyfin 12 redesigned the video OSD (no .headerRight): anchor to
-        // a known top-right OSD button in the same player.
-        var anchor = scope.querySelector(".btnVideoOsdSettings")
-            || scope.querySelector(".btnAirPlay")
-            || scope.querySelector(".btnChromecast");
-        if (anchor && anchor.parentNode) {
-            return { parent: anchor.parentNode, sibling: anchor };
-        }
-        return null;
     }
 
     function setStatus(root, text, isError) {
