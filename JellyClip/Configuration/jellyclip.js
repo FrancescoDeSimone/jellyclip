@@ -127,6 +127,49 @@
         return window.ApiClient || null;
     }
 
+    // Jellyfin 12 removed legacy auth (api_key query param, X-Emby-Token).
+    // Authenticate exactly like the bundled web client does.
+    function getAuthHeaders(api, token) {
+        var tok = token;
+        if (!tok && api && typeof api.accessToken === "function") {
+            try {
+                tok = api.accessToken();
+            } catch (e) {
+                tok = "";
+            }
+        }
+        var app = "JellyClip";
+        var ver = "12.0.0";
+        var dev = "browser";
+        var devId = "";
+        if (api) {
+            try {
+                if (typeof api.appName === "function") {
+                    app = api.appName() || app;
+                }
+                if (typeof api.appVersion === "function") {
+                    ver = api.appVersion() || ver;
+                }
+                if (typeof api.deviceName === "function") {
+                    dev = api.deviceName() || dev;
+                }
+                if (typeof api.deviceId === "function") {
+                    devId = api.deviceId() || devId;
+                }
+            } catch (e) {
+            }
+        }
+        var value = "MediaBrowser " + "Client=\"" + encodeURIComponent(app) + "\""
+            + ", Device=\"" + encodeURIComponent(dev) + "\""
+            + ", DeviceId=\"" + encodeURIComponent(devId) + "\""
+            + ", Version=\"" + encodeURIComponent(ver) + "\""
+            + ", Token=\"" + encodeURIComponent(tok || "") + "\"";
+        return {
+            "Authorization": value,
+            "X-Emby-Authorization": value
+        };
+    }
+
     function getBar() {
         return document.getElementById(UI_ID);
     }
@@ -218,15 +261,12 @@
 
             var userId = (typeof api.getCurrentUserId === "function") ? api.getCurrentUserId() : "";
             var url = api.getUrl("Users/" + userId + "/Items/" + itemId, {
-                Fields: "MediaStreams",
-                api_key: token
+                Fields: "MediaStreams"
             });
             return fetch(url, {
                 method: "GET",
                 credentials: "include",
-                headers: {
-                    "X-Emby-Token": token
-                }
+                headers: getAuthHeaders(api, token)
             });
         }).then(function (response) {
             if (!response || !response.ok) {
@@ -272,13 +312,11 @@
         }
         var pageItemId = extractItemId(video);
 
-        var url = api.getUrl("Sessions", { ActiveWithinSeconds: 120, api_key: token });
+        var url = api.getUrl("Sessions", { ActiveWithinSeconds: 120 });
         return fetch(url, {
             method: "GET",
             credentials: "include",
-            headers: {
-                "X-Emby-Token": token
-            }
+            headers: getAuthHeaders(api, token)
         }).then(function (response) {
             if (!response.ok) {
                 return null;
@@ -321,20 +359,38 @@
         });
     }
 
-    function triggerDownload(downloadUrl) {
-        // Hidden iframe: the attachment response downloads without navigating
-        // the app page (location.assign can navigate in some browsers).
-        var iframe = document.createElement("iframe");
-        iframe.style.display = "none";
-        iframe.style.width = "0";
-        iframe.style.height = "0";
-        iframe.src = downloadUrl;
-        document.body.appendChild(iframe);
-        setTimeout(function () {
-            if (iframe.parentNode) {
-                iframe.parentNode.removeChild(iframe);
+    function triggerDownload(downloadUrl, api, token) {
+        // Fetch with auth headers (query-string api keys are no longer
+        // accepted), then download via a temporary object URL. This keeps
+        // the player page in place in every browser.
+        fetch(downloadUrl, {
+            method: "GET",
+            credentials: "include",
+            headers: getAuthHeaders(api, token)
+        }).then(function (response) {
+            if (!response.ok) {
+                throw new Error("HTTP " + response.status);
             }
-        }, 60000);
+            return response.blob();
+        }).then(function (blob) {
+            var objectUrl = (window.URL || window.webkitURL).createObjectURL(blob);
+            var link = document.createElement("a");
+            link.href = objectUrl;
+            link.download = downloadUrl.split("/").pop().split("?")[0] || "clip.mp4";
+            document.body.appendChild(link);
+            link.click();
+            setTimeout(function () {
+                if (link.parentNode) {
+                    link.parentNode.removeChild(link);
+                }
+                (window.URL || window.webkitURL).revokeObjectURL(objectUrl);
+            }, 60000);
+        }).catch(function (err) {
+            setStatus(
+                document.querySelector("#" + PANEL_ID),
+                "Download failed: " + (err && err.message ? err.message : err),
+                true);
+        });
     }
 
     function downloadClip(root, video) {
@@ -361,8 +417,7 @@
 
             var params = {
                 startSeconds: state.start,
-                endSeconds: state.end,
-                api_key: token
+                endSeconds: state.end
             };
             if (state.audioStreamIndex !== null && state.audioStreamIndex !== undefined) {
                 params.audioStreamIndex = state.audioStreamIndex;
@@ -377,9 +432,7 @@
             return fetch(createUrl, {
                 method: "POST",
                 credentials: "include",
-                headers: {
-                    "X-Emby-Token": token
-                }
+                headers: getAuthHeaders(api, token)
             });
         }).then(function (response) {
             if (!response) {
@@ -398,9 +451,7 @@
                     throw new Error("Unexpected server response.");
                 }
 
-                var downloadUrl = api.getUrl("JellyClip/clips/" + encodeURIComponent(data.filename), {
-                    api_key: token
-                });
+                var downloadUrl = api.getUrl("JellyClip/clips/" + encodeURIComponent(data.filename));
 
                 setStatus(root, "");
                 var statusEl = root.querySelector(".jellyclip-status");
@@ -415,7 +466,7 @@
                 });
                 statusEl.appendChild(retry);
 
-                triggerDownload(downloadUrl);
+                triggerDownload(downloadUrl, api, token);
             });
         }).catch(function (err) {
             setStatus(root, "Clip failed: " + (err && err.message ? err.message : err), true);

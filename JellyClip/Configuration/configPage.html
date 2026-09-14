@@ -52,15 +52,42 @@
                         statusEl.style.color = isError ? "#c62828" : "#2e7d32";
                     }
 
+                    function authHeaders() {
+                        // Jellyfin 12 removed legacy auth (api_key query param):
+                        // authenticate exactly like the bundled web client does.
+                        var client = window.ApiClient;
+                        var headers = {};
+                        if (!client) {
+                            return headers;
+                        }
+                        try {
+                            var token = (typeof client.accessToken === "function") ? client.accessToken() : "";
+                            var app = (typeof client.appName === "function" && client.appName()) || "JellyClip";
+                            var ver = (typeof client.appVersion === "function" && client.appVersion()) || "12.0.0";
+                            var dev = (typeof client.deviceName === "function" && client.deviceName()) || "browser";
+                            var devId = (typeof client.deviceId === "function" && client.deviceId()) || "";
+                            var value = 'MediaBrowser Client="' + encodeURIComponent(app) + '"'
+                                + ', Device="' + encodeURIComponent(dev) + '"'
+                                + ', DeviceId="' + encodeURIComponent(devId) + '"'
+                                + ', Version="' + encodeURIComponent(ver) + '"'
+                                + ', Token="' + encodeURIComponent(token || "") + '"';
+                            headers["Authorization"] = value;
+                            headers["X-Emby-Authorization"] = value;
+                        } catch (e) {
+                        }
+                        return headers;
+                    }
+
                     function apiUrl(path, method) {
                         var client = window.ApiClient;
                         if (!client) {
                             setStatus("API client not available.", true);
                             return null;
                         }
-                        return fetch(client.getUrl(path, { api_key: client.accessToken() }), {
+                        return fetch(client.getUrl(path), {
                             method: method,
-                            credentials: "include"
+                            credentials: "include",
+                            headers: authHeaders()
                         });
                     }
 
