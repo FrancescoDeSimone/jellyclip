@@ -120,7 +120,17 @@
     var hideTimer = null;
 
     function getContainer() {
-        return document.querySelector(".videoPlayerContainer");
+        // Prefer the container that is actually playing something; a bare
+        // first match can be a hidden template.
+        var all = document.querySelectorAll(".videoPlayerContainer");
+        var i, v;
+        for (i = 0; i < all.length; i++) {
+            v = all[i].querySelector("video");
+            if (v && (v.currentSrc || v.src)) {
+                return all[i];
+            }
+        }
+        return all.length > 0 ? all[0] : null;
     }
 
     function getApiClient() {
@@ -174,24 +184,29 @@
         return document.getElementById(UI_ID);
     }
 
-    function getOsdHeader() {
-        return document.querySelector(".osdHeader") || document.querySelector("[class*=\"osdHeader\"]");
+    function getOsdHeader(container) {
+        // Scope to the playing video's container: document-wide queries can
+        // hit hidden templates or other players' headers.
+        var scope = container || document;
+        return scope.querySelector(".osdHeader") || scope.querySelector("[class*=\"osdHeader\"]");
     }
 
-    function getHeaderRight() {
-        var osd = getOsdHeader();
-        var legacy = osd ? osd.querySelector(".headerRight") : null;
+    function getHeaderRight(container) {
+        var scope = container || document;
+        var osd = getOsdHeader(container);
+        var legacy = osd
+            ? osd.querySelector(".headerRight")
+            : scope.querySelector(".headerRight");
         if (legacy) {
-            return { parent: legacy, sibling: null, css: null };
+            return { parent: legacy, sibling: null };
         }
         // Jellyfin 12 redesigned the video OSD (no .headerRight): anchor to
-        // a known top-right OSD button and inherit its styling.
-        var anchor = document.querySelector(".btnVideoOsdSettings")
-            || document.querySelector(".btnAirPlay")
-            || document.querySelector(".btnChromecast");
+        // a known top-right OSD button in the same player.
+        var anchor = scope.querySelector(".btnVideoOsdSettings")
+            || scope.querySelector(".btnAirPlay")
+            || scope.querySelector(".btnChromecast");
         if (anchor && anchor.parentNode) {
-            return { parent: anchor.parentNode, sibling: anchor,
-                     css: anchor.className };
+            return { parent: anchor.parentNode, sibling: anchor };
         }
         return null;
     }
@@ -692,7 +707,7 @@
             return;
         }
 
-        var header = getOsdHeader();
+        var header = getOsdHeader(bar.__container);
         var hidden = !header || header.classList.contains("osdHeader-hidden")
             || (getComputedStyle(header).opacity === "0");
         if (hidden && bar.__panel.style.display !== "none") {
@@ -703,7 +718,7 @@
 
     function mountIfNeeded() {
         var container = getContainer();
-        var slot = getHeaderRight();
+        var slot = getHeaderRight(container);
         var bar = getBar();
 
         if (!container || !slot) {
