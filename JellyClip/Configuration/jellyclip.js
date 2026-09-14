@@ -201,9 +201,23 @@
     }
 
     function getHeaderRight() {
-        // Search scopes in order: the playing video's dialog first
-        // (hidden templates and other players must never win), then
-        // the whole document. Within a scope, prefer visible slots.
+        // The active video OSD's own slot wins. In Jellyfin 10.x the player
+        // has a dedicated header; in 12 the app header (.skinHeader) turns
+        // into the OSD header, and its .headerRight stays empty (zero size)
+        // until the buttons inside it are unhidden, so it must be accepted
+        // without a visibility check - a visibility check would fall through
+        // to the bottom control row.
+        var osd = getOsdHeader();
+        if (osd) {
+            var osdRight = osd.querySelector(".headerRight");
+            if (osdRight) {
+                return { parent: osdRight, sibling: null };
+            }
+        }
+
+        // Fallback: search scopes in order - the playing video's dialog first
+        // (hidden templates and other players must never win), then the
+        // whole document. Within a scope, prefer visible slots.
         var scopes = [];
         var container = getContainer();
         if (container) {
@@ -824,10 +838,18 @@
 
     // -------------------------------------------------------------- startup
     mountIfNeeded();
-    setInterval(syncPanelWithHeader, 500);
 
     // Jellyfin recreates the player dialog and OSD for each playback session, so
     // keep watching the document tree and re-attach the icon when it reappears.
     var observer = new MutationObserver(mountIfNeeded);
     observer.observe(document.body, { childList: true, subtree: true });
+
+    // The OSD header appears (and its bar shows/hides) through class changes,
+    // which the tree observer does not see. Re-check on a timer so the icon
+    // moves into the top bar as soon as the player flags its header, and the
+    // panel closes together with the bar.
+    setInterval(function () {
+        mountIfNeeded();
+        syncPanelWithHeader();
+    }, 500);
 })();
