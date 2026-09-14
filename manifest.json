@@ -1,0 +1,11 @@
+[
+  {
+    "guid": "6942adc5-8b2f-4a7d-9c3e-51d8e0f6a4b7",
+    "name": "JellyClip",
+    "description": "Select a start and end point in the video you are watching and download the clip.",
+    "overview": "Creates clips from a video that is currently playing in the web client.",
+    "owner": "FrancescoDeSimone",
+    "category": "General",
+    "versions": []
+  }
+]

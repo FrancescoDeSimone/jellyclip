@@ -1,0 +1,64 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Build plugin
+        run: dotnet build JellyClip/JellyClip.csproj -c Release
+
+      - name: Run JS tests
+        run: node --test test/jellyclip.test.mjs
+
+      - name: Package release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          ARTIFACT="JellyClip-${VERSION}.zip"
+          rm -f "$ARTIFACT"
+          (cd JellyClip/bin/Release/net10.0 && zip "$OLDPWD/$ARTIFACT" JellyClip.dll)
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "ARTIFACT=$ARTIFACT" >> "$GITHUB_ENV"
+
+      - name: Create GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ARTIFACT }}
+
+      - name: Update plugin catalogue manifest
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          python3 scripts/update-manifest.py \
+            --manifest manifest.json \
+            --version "$VERSION" \
+            --zip "$ARTIFACT" \
+            --url "https://github.com/${{ github.repository }}/releases/download/v${VERSION}/${ARTIFACT}" \
+            --target-abi 12.0.0.0 \
+            --changelog "Release $VERSION. See https://github.com/${{ github.repository }}/releases/tag/v${VERSION} for details."
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add manifest.json
+          git commit -m "catalogue: release $VERSION [skip ci]" || echo "nothing to commit"
+          git push origin HEAD:main
