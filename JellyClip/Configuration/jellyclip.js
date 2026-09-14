@@ -525,14 +525,13 @@
         return { wrap: wrap, input: input };
     }
 
-    function buildIconAndPanel(video, css) {
+    function buildIconAndPanel(video) {
         var icon = document.createElement("button");
         icon.type = "button";
-        icon.setAttribute("is", "paper-icon-button-light");
         icon.id = UI_ID;
-        icon.className = css
-            ? css + " jellyclip-header-icon"
-            : "headerButton headerButtonRight paper-icon-button-light jellyclip-header-icon";
+        // Fully self-styled (see jellyclip.css): never inherit sibling
+        // classes, they may carry hidden/selected state on some versions.
+        icon.className = "jellyclip-header-icon";
         icon.title = "Clip";
         // Inline SVG: independent of the Material Icons font/ligatures, so it
         // renders identically under any theme.
@@ -732,7 +731,7 @@
             return;
         }
 
-        var built = buildIconAndPanel(video, slot.css);
+        var built = buildIconAndPanel(video);
         built.icon.__container = container;
         built.icon.__panel = built.panel;
         if (slot.sibling) {
