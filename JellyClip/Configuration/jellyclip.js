@@ -184,11 +184,50 @@
         return document.getElementById(UI_ID);
     }
 
-    function getOsdHeader(container) {
-        // Scope to the playing video's container: document-wide queries can
-        // hit hidden templates or other players' headers.
-        var scope = container || document;
-        return scope.querySelector(".osdHeader") || scope.querySelector("[class*=\"osdHeader\"]");
+    function isVisible(el) {
+        if (!el || !el.getBoundingClientRect) {
+            return false;
+        }
+        try {
+            var r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function getOsdHeader() {
+        return document.querySelector(".osdHeader") || document.querySelector("[class*=\"osdHeader\"]");
+    }
+
+    function getHeaderRight() {
+        // Prefer a VISIBLE slot: hidden templates and other players'
+        // headers must not win. The video OSD is not necessarily inside
+        // .videoPlayerContainer, so search document-wide.
+        var i, el;
+        var rights = document.querySelectorAll(".headerRight");
+        for (i = 0; i < rights.length; i++) {
+            if (isVisible(rights[i])) {
+                return { parent: rights[i], sibling: null };
+            }
+        }
+        var anchors = document.querySelectorAll(
+            ".btnVideoOsdSettings,.btnAirPlay,.btnChromecast");
+        for (i = 0; i < anchors.length; i++) {
+            el = anchors[i];
+            if (isVisible(el) && el.parentNode) {
+                return { parent: el.parentNode, sibling: el };
+            }
+        }
+        // Fallback: any present slot (may become visible later).
+        if (rights.length > 0) {
+            return { parent: rights[0], sibling: null };
+        }
+        if (anchors.length > 0 && anchors[0].parentNode) {
+            return { parent: anchors[0].parentNode,
+                     sibling: anchors[0] };
+        }
+        return null;
     }
 
     function getHeaderRight(container) {
@@ -707,9 +746,18 @@
             return;
         }
 
-        var header = getOsdHeader(bar.__container);
-        var hidden = !header || header.classList.contains("osdHeader-hidden")
-            || (getComputedStyle(header).opacity === "0");
+        var header = null;
+        if (bar.parentNode && bar.parentNode.closest) {
+            try {
+                header = bar.parentNode.closest(".osdHeader");
+            } catch (e) {
+                header = null;
+            }
+        }
+        if (!header) {
+            header = getOsdHeader();
+        }
+        var hidden = !header || header.classList.contains("osdHeader-hidden");
         if (hidden && bar.__panel.style.display !== "none") {
             bar.__pinned = false;
             bar.__panel.style.display = "none";
@@ -725,7 +773,7 @@
             teardown(getBar());
             return;
         }
-        var slot = getHeaderRight(container);
+        var slot = getHeaderRight();
         if (!slot) {
             dbg.last = "no-slot";
             teardown(getBar());
