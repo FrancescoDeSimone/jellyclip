@@ -21,17 +21,20 @@
     cursor: pointer;
     pointer-events: auto;
     box-sizing: border-box;
+    flex: 0 0 auto;
+    border-radius: 50%;
 }
 
 #jellyclip-ui.jellyclip-header-icon svg {
-    width: 1.25em;
-    height: 1.25em;
+    width: 1.4em;
+    height: 1.4em;
     display: block;
 }
 
 #jellyclip-ui.jellyclip-header-icon:hover,
 #jellyclip-ui.jellyclip-header-icon:focus-visible {
     opacity: 0.85;
+    background: rgba(255, 255, 255, 0.12);
 }
 
 #jellyclip-panel {

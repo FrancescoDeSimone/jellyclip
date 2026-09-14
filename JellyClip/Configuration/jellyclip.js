@@ -196,21 +196,43 @@
         }
     }
 
+    // getClientRects() is empty for display:none (and detached) elements, but
+    // still returns boxes for elements hidden only by opacity/visibility.
+    function isRendered(el) {
+        return !!el && el.getClientRects().length > 0;
+    }
+
     function getOsdHeader() {
-        return document.querySelector(".osdHeader") || document.querySelector("[class*=\"osdHeader\"]");
+        // Jellyfin 12 keeps more than one element with the osdHeader class in
+        // the document (the live React player header plus hidden legacy ones),
+        // so only a rendered header may host the icon.
+        var all = document.querySelectorAll(".osdHeader");
+        for (var i = 0; i < all.length; i++) {
+            if (isRendered(all[i])) {
+                return all[i];
+            }
+        }
+        return all.length > 0 ? all[0] : null;
     }
 
     function getHeaderRight() {
-        // The active video OSD's own slot wins. In Jellyfin 10.x the player
-        // has a dedicated header; in 12 the app header (.skinHeader) turns
-        // into the OSD header, and its .headerRight stays empty (zero size)
-        // until the buttons inside it are unhidden, so it must be accepted
-        // without a visibility check - a visibility check would fall through
-        // to the bottom control row.
+        // The active video OSD's own slot wins.
         var osd = getOsdHeader();
         if (osd) {
+            // Jellyfin 12 renders the video OSD header with React/Material UI:
+            // there is no .headerRight, the right-hand controls (SyncPlay,
+            // Cast) live in the last group of its toolbar. Mount there so the
+            // icon sits at the far right, next to cast.
+            var toolbar = osd.querySelector(".videoOsd-appBar");
+            var group = toolbar ? toolbar.lastElementChild : null;
+            if (group) {
+                return { parent: group, sibling: null };
+            }
+
+            // Jellyfin 10.x / legacy markup: the header's own right slot. It
+            // can be empty (zero size) until the OSD shows, so no size check.
             var osdRight = osd.querySelector(".headerRight");
-            if (osdRight) {
+            if (osdRight && getComputedStyle(osdRight).display !== "none") {
                 return { parent: osdRight, sibling: null };
             }
         }
@@ -599,6 +621,38 @@
         return { wrap: wrap, input: input };
     }
 
+    // Jellyfin 12 mounts the icon inside a Material UI toolbar. Mirror the box
+    // and glyph size of the neighbouring icon buttons so the clip button lines
+    // up with them instead of using its own em-based sizing.
+    function matchMuiIconButton(icon, parent) {
+        var btns = parent.querySelectorAll(".MuiIconButton-root");
+        var i, ref = null, rect = null;
+        for (i = 0; i < btns.length; i++) {
+            rect = btns[i].getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0) {
+                ref = btns[i];
+                break;
+            }
+        }
+        if (!ref) {
+            return;
+        }
+
+        icon.style.width = rect.width + "px";
+        icon.style.height = rect.height + "px";
+        icon.style.margin = "0";
+
+        var svg = icon.querySelector("svg");
+        var refSvg = ref.querySelector("svg");
+        if (svg && refSvg) {
+            var svgRect = refSvg.getBoundingClientRect();
+            if (svgRect.width > 0) {
+                svg.style.width = svgRect.width + "px";
+                svg.style.height = svgRect.height + "px";
+            }
+        }
+    }
+
     function buildIconAndPanel(video) {
         var icon = document.createElement("button");
         icon.type = "button";
@@ -777,7 +831,16 @@
         if (!header) {
             header = getOsdHeader();
         }
-        var hidden = !header || header.classList.contains("osdHeader-hidden");
+        var hidden = !header
+            || header.classList.contains("osdHeader-hidden")
+            || !isRendered(header);
+        if (!hidden) {
+            // Jellyfin 12 hides its React header with inline styles instead of
+            // the osdHeader-hidden class.
+            var cs = getComputedStyle(header);
+            hidden = cs.visibility === "hidden"
+                || parseFloat(cs.opacity || "1") < 0.5;
+        }
         if (hidden && bar.__panel.style.display !== "none") {
             bar.__pinned = false;
             bar.__panel.style.display = "none";
@@ -810,6 +873,7 @@
                     slot.parent.appendChild(bar);
                 }
             }
+            matchMuiIconButton(bar, slot.parent);
             dbg.mounted = !!document.getElementById(UI_ID);
             dbg.last = "already-mounted";
             return;
@@ -831,6 +895,7 @@
         } else {
             slot.parent.appendChild(built.icon);
         }
+        matchMuiIconButton(built.icon, slot.parent);
         document.body.appendChild(built.panel);
         dbg.mounted = true;
         dbg.last = "mounted";
