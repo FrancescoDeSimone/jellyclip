@@ -717,15 +717,21 @@
     }
 
     function mountIfNeeded() {
+        var dbg = window.__jellyclipDebug || (window.__jellyclipDebug = { attempts: 0, mounted: false, last: "init" });
+        dbg.attempts++;
         var container = getContainer();
-        var slot = getHeaderRight(container);
-        var bar = getBar();
-
-        if (!container || !slot) {
-            // Playback ended (or header not rendered yet); tear down leftovers.
-            teardown(bar);
+        if (!container) {
+            dbg.last = "no-container";
+            teardown(getBar());
             return;
         }
+        var slot = getHeaderRight(container);
+        if (!slot) {
+            dbg.last = "no-slot";
+            teardown(getBar());
+            return;
+        }
+        var bar = getBar();
 
         if (bar && bar.__container === container) {
             // Already mounted for this player dialog; ensure it is inside the header.
@@ -736,6 +742,8 @@
                     slot.parent.appendChild(bar);
                 }
             }
+            dbg.mounted = !!document.getElementById(UI_ID);
+            dbg.last = "already-mounted";
             return;
         }
 
@@ -743,6 +751,7 @@
 
         var video = container.querySelector("video");
         if (!video) {
+            dbg.last = "no-video";
             return;
         }
 
@@ -755,6 +764,8 @@
             slot.parent.appendChild(built.icon);
         }
         document.body.appendChild(built.panel);
+        dbg.mounted = true;
+        dbg.last = "mounted";
     }
 
     // -------------------------------------------------------------- startup
