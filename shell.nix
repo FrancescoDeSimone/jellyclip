@@ -3,7 +3,7 @@
 
 pkgs.mkShell {
   packages = with pkgs; [
-    dotnet-sdk_9
+    dotnet-sdk_10
     ffmpeg
   ];
 }
