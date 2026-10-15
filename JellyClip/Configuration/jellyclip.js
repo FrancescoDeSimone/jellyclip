@@ -17,41 +17,62 @@
     // Helpers are declared before the Node guard below so the exported closures
     // always see assigned values.
 
-    function extractItemId(video) {
+    var ITEM_ID = "[0-9a-fA-F]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
+    var STREAM_URL_ITEM = new RegExp("/Videos/(" + ITEM_ID + ")(?:/|$)");
+    var ROUTE_ITEM = new RegExp("[?&](?:id|itemId|videoId)=(" + ITEM_ID + ")");
+    var ANY_ITEM = new RegExp("\\b(" + ITEM_ID + ")\\b");
+
+    // Item id carried by a stream request (`/Videos/<id>/stream…`,
+    // `/Videos/<id>/master.m3u8…`): the only signal that ties a request to the
+    // tab that made it.
+    function itemIdFromStreamUrl(url) {
+        if (!url) {
+            return null;
+        }
+
+        var match = String(url).match(STREAM_URL_ITEM);
+        return match ? match[1] : null;
+    }
+
+    // Item this page is playing, most specific signal first: what the element
+    // streams, what the page requested (hls.js plays from a blob: url, so
+    // transcoded playback keeps no id on the element), then the route and the
+    // poster, which can both belong to a parent (a series backdrop on an
+    // episode page, a series route while a dialog plays one episode).
+    function extractItemId(video, streamedItemId) {
         if (!video) {
             return null;
+        }
+
+        // 1) Direct play and native HLS keep the item id in the element's url.
+        var fromSource = itemIdFromStreamUrl(video.currentSrc) || itemIdFromStreamUrl(video.src);
+        if (fromSource) {
+            return fromSource;
+        }
+
+        // 2) Last stream this page asked for.
+        if (streamedItemId) {
+            return streamedItemId;
         }
 
         var w = (typeof window !== "undefined") ? window : null;
         var hash = w ? (w.location.hash || "") : "";
         var search = w ? (w.location.search || "") : "";
 
-        // 1) Explicit route/view id (details page) — the item being viewed/played.
-        var route = hash.match(/[?&](?:id|itemId|videoId)=([0-9a-fA-F]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/);
+        // 3) Explicit route/view id (details page).
+        var route = hash.match(ROUTE_ITEM);
         if (route) {
             return route[1];
         }
 
-        // 2) Direct stream or HLS URLs carry the item id in /Videos/<id>/.
-        var sources = [video.currentSrc || "", video.src || ""];
-        for (var i = 0; i < sources.length; i++) {
-            var sMatch = sources[i].match(/\/Videos\/([0-9a-fA-F]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?:\/|$)/);
-            if (sMatch) {
-                return sMatch[1];
-            }
-        }
-
-        // 3) Last resort: any item id in these, preferring the video element's own
-        //    sources over the poster (the poster can be a parent, e.g. a series
-        //    backdrop, whose id is not a playable video).
-        var candidates = [video.currentSrc || "", video.src || "", video.poster || "", hash, search];
-        for (var j = 0; j < candidates.length; j++) {
-            var text = candidates[j];
-            if (!text) {
+        // 4) Last resort: any item id in these.
+        var candidates = [video.poster || "", hash, search];
+        for (var i = 0; i < candidates.length; i++) {
+            if (!candidates[i]) {
                 continue;
             }
 
-            var any = text.match(/\b([0-9a-fA-F]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\b/);
+            var any = candidates[i].match(ANY_ITEM);
             if (any) {
                 return any[1];
             }
@@ -95,6 +116,7 @@
         if (typeof module !== "undefined" && typeof module.exports !== "undefined") {
             module.exports = {
                 extractItemId: extractItemId,
+                itemIdFromStreamUrl: itemIdFromStreamUrl,
                 formatTime: formatTime,
                 formatDuration: formatDuration
             };
@@ -106,6 +128,48 @@
         return;
     }
     window.__jellyclipLoaded = true;
+
+    // --------------------------------------------------------- item tracking
+    // Every tab of a browser shares its DeviceId, so the server holds ONE session
+    // for all of them and /Sessions reports whichever tab played last. What this
+    // page itself streamed is the only trustworthy source for the item being
+    // watched - and hls.js keeps it out of the DOM (blob: url), so follow the
+    // stream requests the player makes.
+    var streamedItemId = null;
+
+    function noteStreamUrl(url) {
+        var itemId = itemIdFromStreamUrl(url);
+        if (itemId) {
+            streamedItemId = itemId;
+        }
+    }
+
+    function trackStreamRequests() {
+        try {
+            var originalFetch = window.fetch;
+            if (typeof originalFetch === "function") {
+                window.fetch = function (input) {
+                    noteStreamUrl(typeof input === "string" ? input : (input && input.url));
+                    return originalFetch.apply(this, arguments);
+                };
+            }
+        } catch (e) {
+            // Tracking is best effort only.
+        }
+
+        try {
+            var xhr = window.XMLHttpRequest;
+            var open = xhr && xhr.prototype.open;
+            if (typeof open === "function") {
+                xhr.prototype.open = function (method, url) {
+                    noteStreamUrl(url);
+                    return open.apply(this, arguments);
+                };
+            }
+        } catch (e) {
+            // Tracking is best effort only.
+        }
+    }
 
     // ------------------------------------------------------------ DOM state
     var UI_ID = "jellyclip-ui";
@@ -120,17 +184,27 @@
     var hideTimer = null;
 
     function getContainer() {
-        // Prefer the container that is actually playing something; a bare
-        // first match can be a hidden template.
+        // Several players can sit in the document at once (a hidden leftover of
+        // the page behind the player, hidden templates): the one that is
+        // rendered - and playing - wins. A hidden leftover has its own video
+        // element with its own currentTime and must never be read from.
         var all = document.querySelectorAll(".videoPlayerContainer");
-        var i, v;
-        for (i = 0; i < all.length; i++) {
-            v = all[i].querySelector("video");
-            if (v && (v.currentSrc || v.src)) {
-                return all[i];
+        var best = null;
+        var bestScore = -1;
+        for (var i = 0; i < all.length; i++) {
+            var v = all[i].querySelector("video");
+            if (!v || !(v.currentSrc || v.src)) {
+                continue;
+            }
+
+            var score = (isRendered(all[i]) ? 2 : 0)
+                + ((!v.paused && !v.ended && v.readyState >= 2) ? 1 : 0);
+            if (score > bestScore) {
+                bestScore = score;
+                best = all[i];
             }
         }
-        return all.length > 0 ? all[0] : null;
+        return best;
     }
 
     function getApiClient() {
@@ -306,6 +380,33 @@
         syncUi(root);
     }
 
+    // The player can move on to the next video inside the same container (queue,
+    // next episode): the times and audio track of the previous video must not
+    // leak into the new one.
+    function resetSelectionOnItemChange(bar) {
+        var panel = bar.__panel;
+        var itemId = extractItemId(bar.__video, streamedItemId);
+        if (!panel || !itemId || itemId === bar.__itemId) {
+            return;
+        }
+
+        if (bar.__itemId) {
+            clearSelection(panel);
+            state.audioStreamIndex = null;
+            var select = panel.querySelector(".jellyclip-audio-select");
+            if (select) {
+                select.value = "";
+                select.__populated = false;
+                while (select.options.length > 1) {
+                    select.remove(1);
+                }
+            }
+            setStatus(panel, "");
+        }
+
+        bar.__itemId = itemId;
+    }
+
     function updateRangeText(root) {
         var el = root.querySelector(".jellyclip-range");
         if (!el) {
@@ -411,16 +512,22 @@
     }
 
     function getPlayingItemId(api, token, video) {
-        // Resolve the authoritative playing item from the server's session list.
-        // With multiple concurrent streams the session of THIS device must win,
-        // otherwise the clip may come from someone else's playback.
+        // What this page plays beats the server's session list: every tab of a
+        // browser shares its DeviceId and therefore its session, whose
+        // NowPlayingItem is whichever tab reported playback last.
+        var localItemId = extractItemId(video, streamedItemId);
+        if (localItemId) {
+            return Promise.resolve(localItemId);
+        }
+
+        // Nothing page-local to go on (unusual): guess from the session list,
+        // which cannot tell this browser's tabs apart.
         var deviceId = null;
         try {
             deviceId = (typeof api.deviceId === "function") ? api.deviceId() : null;
         } catch (e) {
             deviceId = null;
         }
-        var pageItemId = extractItemId(video);
 
         var url = api.getUrl("Sessions", { ActiveWithinSeconds: 120 });
         return fetch(url, {
@@ -444,32 +551,23 @@
                 return null;
             }
 
-            // 1) The session of this browser/device.
+            // The session of this browser. Its item may belong to another tab.
             if (deviceId) {
                 for (var i = 0; i < playing.length; i++) {
                     if (playing[i].DeviceId === deviceId) {
+                        console.warn("[jellyclip] no page-local item id; falling back to this browser's shared session");
                         return playing[i].NowPlayingItem.Id;
                     }
                 }
             }
 
-            // 2) A session playing the item this page is currently showing.
-            if (pageItemId) {
-                for (var j = 0; j < playing.length; j++) {
-                    if (playing[j].NowPlayingItem.Id === pageItemId) {
-                        return pageItemId;
-                    }
-                }
-            }
-
-            // 3) Last resort: any active playback.
-            return playing[0].NowPlayingItem.Id;
+            return null;
         }).catch(function () {
             return null;
         });
     }
 
-    function triggerDownload(downloadUrl, api, token) {
+    function triggerDownload(downloadUrl, fileName, api, token) {
         // Fetch with auth headers (query-string api keys are no longer
         // accepted), then download via a temporary object URL. This keeps
         // the player page in place in every browser.
@@ -486,7 +584,7 @@
             var objectUrl = (window.URL || window.webkitURL).createObjectURL(blob);
             var link = document.createElement("a");
             link.href = objectUrl;
-            link.download = downloadUrl.split("/").pop().split("?")[0] || "clip.mp4";
+            link.download = fileName || downloadUrl.split("/").pop().split("?")[0] || "clip.mp4";
             document.body.appendChild(link);
             // Jellyfin 12's player cancels programmatic clicks in Firefox/Edge:
             // its capture-phase guard only lets clicks through whose target
@@ -537,10 +635,8 @@
         }
 
         var token = api.accessToken ? api.accessToken() : "";
-        var fallbackItemId = extractItemId(video);
 
-        getPlayingItemId(api, token, video).then(function (sessionItemId) {
-            var itemId = sessionItemId || fallbackItemId;
+        getPlayingItemId(api, token, video).then(function (itemId) {
             if (!itemId) {
                 setStatus(root, "Could not determine the current item id.", true);
                 return null;
@@ -597,7 +693,7 @@
                 });
                 statusEl.appendChild(retry);
 
-                triggerDownload(downloadUrl, api, token);
+                triggerDownload(downloadUrl, data.downloadName, api, token);
             });
         }).catch(function (err) {
             setStatus(root, "Clip failed: " + (err && err.message ? err.message : err), true);
@@ -896,8 +992,12 @@
             return;
         }
         var bar = getBar();
+        var video = container.querySelector("video");
 
-        if (bar && bar.__container === container) {
+        // Reuse the mounted icon only while it drives the very same player: a
+        // rebuilt player element or a moved item must not inherit the selection
+        // of the previous video.
+        if (video && bar && bar.__container === container && bar.__video === video) {
             // Already mounted for this player dialog; ensure it is inside the header.
             if (bar.parentNode !== slot.parent) {
                 if (slot.sibling) {
@@ -907,6 +1007,7 @@
                 }
             }
             matchMuiIconButton(bar, slot.parent);
+            resetSelectionOnItemChange(bar);
             dbg.mounted = !!document.getElementById(UI_ID);
             dbg.last = "already-mounted";
             return;
@@ -914,7 +1015,6 @@
 
         teardown(bar);
 
-        var video = container.querySelector("video");
         if (!video) {
             dbg.last = "no-video";
             return;
@@ -922,6 +1022,8 @@
 
         var built = buildIconAndPanel(video);
         built.icon.__container = container;
+        built.icon.__video = video;
+        built.icon.__itemId = extractItemId(video, streamedItemId);
         built.icon.__panel = built.panel;
         if (slot.sibling) {
             slot.parent.insertBefore(built.icon, slot.sibling);
@@ -935,6 +1037,7 @@
     }
 
     // -------------------------------------------------------------- startup
+    trackStreamRequests();
     mountIfNeeded();
 
     // Jellyfin recreates the player dialog and OSD for each playback session, so

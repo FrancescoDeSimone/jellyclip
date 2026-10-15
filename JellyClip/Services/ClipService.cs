@@ -188,8 +188,26 @@ public sealed class ClipService
     }
 
     /// <summary>
-    /// Gets the deterministic cache path for a clip, derived from item name, range and audio track
-    /// (different audio tracks never collide).
+    /// Gets the file name offered to the user for a clip of <paramref name="video"/>.
+    /// </summary>
+    /// <param name="video">The source video item.</param>
+    /// <param name="start">Clip start offset in seconds.</param>
+    /// <param name="end">Clip end offset in seconds.</param>
+    /// <param name="audioStreamIndex">Absolute audio stream index, or <c>null</c> for the default audio track.</param>
+    /// <returns>Download file name for the clip.</returns>
+    public string GetDownloadName(Video video, double start, double end, int? audioStreamIndex)
+    {
+        string safeName = SanitizeFileName(video.Name);
+        string range = $"{FormatTime(start)}-{FormatTime(end)}";
+        string audioPart = audioStreamIndex is null
+            ? string.Empty
+            : $" - aud{audioStreamIndex.Value.ToString(CultureInfo.InvariantCulture)}";
+        return $"{safeName} - {range}{audioPart}.mp4";
+    }
+
+    /// <summary>
+    /// Gets the deterministic cache path for a clip, derived from item, range and audio track
+    /// (two same-named videos never share a file).
     /// </summary>
     /// <param name="video">The source video item.</param>
     /// <param name="start">Clip start offset in seconds.</param>
@@ -198,12 +216,14 @@ public sealed class ClipService
     /// <returns>Absolute cache path for the clip.</returns>
     public string GetClipPath(Video video, double start, double end, int? audioStreamIndex)
     {
-        string safeName = SanitizeFileName(video.Name);
-        string range = $"{FormatTime(start)}-{FormatTime(end)}";
-        string audioPart = audioStreamIndex is null
-            ? string.Empty
-            : $" - aud{audioStreamIndex.Value.ToString(CultureInfo.InvariantCulture)}";
-        return Path.Combine(ClipDirectory, $"{safeName} - {range}{audioPart}.mp4");
+        // The item id in the cache name keeps two same-named videos (a remake,
+        // another version of the same movie) from handing out each other's clip.
+        string downloadName = GetDownloadName(video, start, end, audioStreamIndex);
+        string item = video.Id.ToString("N", CultureInfo.InvariantCulture)[..8];
+
+        // ponytail: two requests generating the identical clip at the same time can
+        // still read a half-written file - add a temp file plus move when it bites.
+        return Path.Combine(ClipDirectory, $"{Path.GetFileNameWithoutExtension(downloadName)} - {item}.mp4");
     }
 
     /// <summary>

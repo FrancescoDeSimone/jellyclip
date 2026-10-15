@@ -70,6 +70,51 @@ test('extractItemId returns null when nothing matches', () => {
     assert.equal(helpers.extractItemId(null), null);
 });
 
+test('itemIdFromStreamUrl reads the item id out of playback requests', () => {
+    assert.equal(
+        helpers.itemIdFromStreamUrl('http://host/Videos/83d96aec36c433796b4f1db34533b578/master.m3u8?PlaySessionId=x'),
+        '83d96aec36c433796b4f1db34533b578');
+    assert.equal(
+        helpers.itemIdFromStreamUrl('http://host/Videos/B3aE45f7-01aa-4d23-b456-426614174999/stream.mkv?Static=true'),
+        'B3aE45f7-01aa-4d23-b456-426614174999');
+    assert.equal(helpers.itemIdFromStreamUrl('blob:https://host/xxxx'), null);
+    assert.equal(helpers.itemIdFromStreamUrl('http://host/Users/83d96aec36c433796b4f1db34533b578/Items'), null);
+    assert.equal(helpers.itemIdFromStreamUrl(''), null);
+    assert.equal(helpers.itemIdFromStreamUrl(undefined), null);
+});
+
+test('extractItemId prefers the tracked stream of this page over the route and poster', () => {
+    Object.defineProperty(globalThis, 'window', {
+        value: { location: { hash: '#/details?id=af5d100a1111b2222c3333d4444e5555f', search: '' } },
+        configurable: true
+    });
+    // HLS playback: element src is a blob, so only the tracked request knows.
+    const video = { poster: '', currentSrc: 'blob:https://host/xxxx', src: 'blob:https://host/xxxx' };
+    assert.equal(helpers.extractItemId(video, 'b518adfda59c0186013ef6e310fafcc4'), 'b518adfda59c0186013ef6e310fafcc4');
+    Reflect.deleteProperty(globalThis, 'window');
+});
+
+test('extractItemId prefers the element source over a stale tracked stream', () => {
+    const video = {
+        poster: '',
+        currentSrc: 'http://host/Videos/83d96aec36c433796b4f1db34533b578/stream.mkv?Static=true',
+        src: ''
+    };
+    assert.equal(
+        helpers.extractItemId(video, 'b518adfda59c0186013ef6e310fafcc4'),
+        '83d96aec36c433796b4f1db34533b578');
+});
+
+test('extractItemId falls back to the route when the tracked stream is unknown', () => {
+    Object.defineProperty(globalThis, 'window', {
+        value: { location: { hash: '#/details?id=83d96aec36c433796b4f1db34533b578', search: '' } },
+        configurable: true
+    });
+    const video = { poster: '', currentSrc: 'blob:https://host/xxxx', src: 'blob:https://host/xxxx' };
+    assert.equal(helpers.extractItemId(video, null), '83d96aec36c433796b4f1db34533b578');
+    Reflect.deleteProperty(globalThis, 'window');
+});
+
 test('formatTime renders minutes, seconds and hours', () => {
     assert.equal(helpers.formatTime(0), '0:00');
     assert.equal(helpers.formatTime(5), '0:05');

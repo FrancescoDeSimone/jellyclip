@@ -131,7 +131,14 @@ public sealed class JellyClipController : ControllerBase
         {
             string clipPath = await _clipService.CreateClipAsync(video, startSeconds, endSeconds, audioStreamIndex, cancellationToken).ConfigureAwait(false);
             var info = new FileInfo(clipPath);
-            return Ok(new { filename = Path.GetFileName(clipPath), size = info.Length });
+            return Ok(new
+            {
+                filename = Path.GetFileName(clipPath),
+
+                // The cached name carries the item id, the download gets the plain name.
+                downloadName = _clipService.GetDownloadName(video, startSeconds, endSeconds, audioStreamIndex),
+                size = info.Length
+            });
         }
         catch (ClipException ex)
         {
