@@ -109,7 +109,11 @@ public sealed class ClipService
         BaseItem? item = _libraryManager.GetItemById(id);
         if (item is not Video resolved)
         {
-            error = "The selected item is not a video.";
+            // Name what it actually is: the client sends the series id of the
+            // playing episode when the stream itself carries no id.
+            error = item is null
+                ? "The selected item was not found."
+                : $"The selected item is not a video (it is a {item.GetType().Name} named \"{item.Name}\").";
             return false;
         }
 

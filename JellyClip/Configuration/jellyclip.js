@@ -34,26 +34,30 @@
         return match ? match[1] : null;
     }
 
-    // Item this page is playing, most specific signal first: what the element
-    // streams, what the page requested (hls.js plays from a blob: url, so
-    // transcoded playback keeps no id on the element), then the route and the
-    // poster, which can both belong to a parent (a series backdrop on an
-    // episode page, a series route while a dialog plays one episode).
-    function extractItemId(video, streamedItemId) {
+    // Every item id this page can name for what it is playing, most specific
+    // signal first: what the element streams, what the page requested (hls.js
+    // plays from a blob: url, so transcoded playback keeps no id on the
+    // element), then the route and the poster. The latter two can name a parent
+    // (a series route, the series backdrop an episode inherits), so the server
+    // - which knows what is really a video - picks from this list.
+    function itemIdCandidates(video, streamedItemId) {
+        var ids = [];
+        var push = function (itemId) {
+            if (itemId && ids.indexOf(itemId) === -1) {
+                ids.push(itemId);
+            }
+        };
+
         if (!video) {
-            return null;
+            return ids;
         }
 
         // 1) Direct play and native HLS keep the item id in the element's url.
-        var fromSource = itemIdFromStreamUrl(video.currentSrc) || itemIdFromStreamUrl(video.src);
-        if (fromSource) {
-            return fromSource;
-        }
+        push(itemIdFromStreamUrl(video.currentSrc));
+        push(itemIdFromStreamUrl(video.src));
 
         // 2) Last stream this page asked for.
-        if (streamedItemId) {
-            return streamedItemId;
-        }
+        push(streamedItemId);
 
         var w = (typeof window !== "undefined") ? window : null;
         var hash = w ? (w.location.hash || "") : "";
@@ -61,24 +65,40 @@
 
         // 3) Explicit route/view id (details page).
         var route = hash.match(ROUTE_ITEM);
-        if (route) {
-            return route[1];
-        }
+        push(route ? route[1] : null);
 
-        // 4) Last resort: any item id in these.
-        var candidates = [video.poster || "", hash, search];
-        for (var i = 0; i < candidates.length; i++) {
-            if (!candidates[i]) {
+        // 4) Anything else the page names, poster first.
+        var texts = [video.poster || "", hash, search];
+        for (var i = 0; i < texts.length; i++) {
+            if (!texts[i]) {
                 continue;
             }
 
-            var any = candidates[i].match(ANY_ITEM);
-            if (any) {
-                return any[1];
-            }
+            var any = texts[i].match(ANY_ITEM);
+            push(any ? any[1] : null);
         }
 
-        return null;
+        return ids;
+    }
+
+    // Best single guess, for checks that only need to notice a change.
+    function extractItemId(video, streamedItemId) {
+        var ids = itemIdCandidates(video, streamedItemId);
+        return ids.length > 0 ? ids[0] : null;
+    }
+
+    // The web client reports its playback position every few seconds, so the
+    // session's own position lags. Comparing loosely is enough: it tells apart
+    // two tabs playing different videos, which is all it is used for.
+    function isCurrentSession(session, video) {
+        var playState = session ? session.PlayState : null;
+        if (!video || !playState || typeof playState.PositionTicks !== "number") {
+            return false;
+        }
+
+        var sessionSeconds = playState.PositionTicks / 10000000;
+        var localSeconds = (typeof video.currentTime === "number") ? video.currentTime : 0;
+        return Math.abs(sessionSeconds - localSeconds) <= 15;
     }
 
     function pad2(value) {
@@ -117,6 +137,8 @@
             module.exports = {
                 extractItemId: extractItemId,
                 itemIdFromStreamUrl: itemIdFromStreamUrl,
+                itemIdCandidates: itemIdCandidates,
+                isCurrentSession: isCurrentSession,
                 formatTime: formatTime,
                 formatDuration: formatDuration
             };
@@ -193,9 +215,14 @@
         var bestScore = -1;
         for (var i = 0; i < all.length; i++) {
             var v = all[i].querySelector("video");
-            if (!v || !(v.currentSrc || v.src)) {
+            if (!v) {
                 continue;
             }
+
+            // A missing url is no disqualification: hls.js plays transcodes
+            // from a blob: MediaSource, and an element that is still loading
+            // has no url yet. Skipping those used to hand the panel a stale
+            // leftover element instead of the one that is actually playing.
 
             var score = (isRendered(all[i]) ? 2 : 0)
                 + ((!v.paused && !v.ended && v.readyState >= 2) ? 1 : 0);
@@ -383,14 +410,34 @@
     // The player can move on to the next video inside the same container (queue,
     // next episode): the times and audio track of the previous video must not
     // leak into the new one.
+
+    // Fingerprint of the playback this page is showing: every id it can name
+    // plus the element's stream url, which changes with every new playback (a
+    // fresh MediaSource gets a fresh blob: url). Enough to notice a switch
+    // without asking the server.
+    function playbackKey(video) {
+        if (!video) {
+            return "";
+        }
+
+        return itemIdCandidates(video, streamedItemId).join(",") + "|" + (video.currentSrc || video.src || "");
+    }
+
     function resetSelectionOnItemChange(bar) {
         var panel = bar.__panel;
-        var itemId = extractItemId(bar.__video, streamedItemId);
-        if (!panel || !itemId || itemId === bar.__itemId) {
+        if (!panel) {
             return;
         }
 
-        if (bar.__itemId) {
+        // The whole fingerprint, not just the best guess: two episodes of one
+        // series share their series id, and the marks of the previous episode
+        // would survive the switch and become this one's times.
+        var itemKey = playbackKey(bar.__video);
+        if (!itemKey || itemKey === bar.__itemKey) {
+            return;
+        }
+
+        if (bar.__itemKey) {
             clearSelection(panel);
             state.audioStreamIndex = null;
             var select = panel.querySelector(".jellyclip-audio-select");
@@ -404,7 +451,7 @@
             setStatus(panel, "");
         }
 
-        bar.__itemId = itemId;
+        bar.__itemKey = itemKey;
     }
 
     function updateRangeText(root) {
@@ -453,6 +500,22 @@
         }
     }
 
+    function fetchItemStreams(api, token, itemId) {
+        var userId = (typeof api.getCurrentUserId === "function") ? api.getCurrentUserId() : "";
+        var url = api.getUrl("Users/" + userId + "/Items/" + itemId, {
+            Fields: "MediaStreams"
+        });
+        return fetch(url, {
+            method: "GET",
+            credentials: "include",
+            headers: getAuthHeaders(api, token)
+        }).then(function (response) {
+            return response.ok ? response.json() : null;
+        }).catch(function () {
+            return null;
+        });
+    }
+
     function populateAudioTracks(select, video) {
         if (select.__populated) {
             return;
@@ -465,63 +528,51 @@
         }
 
         var token = api.accessToken ? api.accessToken() : "";
-        getPlayingItemId(api, token, video).then(function (itemId) {
-            if (!itemId) {
-                return null;
-            }
+        getCandidateItemIds(api, token, video).then(function (ids) {
+            // A parent item - what the poster and the route name while an
+            // episode plays - carries no streams: walk the candidates until one
+            // has audio tracks to offer. Leave the Default option if none has.
+            var fill = function (index) {
+                if (index >= ids.length) {
+                    return;
+                }
 
-            var userId = (typeof api.getCurrentUserId === "function") ? api.getCurrentUserId() : "";
-            var url = api.getUrl("Users/" + userId + "/Items/" + itemId, {
-                Fields: "MediaStreams"
-            });
-            return fetch(url, {
-                method: "GET",
-                credentials: "include",
-                headers: getAuthHeaders(api, token)
-            });
-        }).then(function (response) {
-            if (!response || !response.ok) {
-                return null;
-            }
-            return response.json();
-        }).then(function (item) {
-            if (!item || !Array.isArray(item.MediaStreams)) {
-                return;
-            }
+                fetchItemStreams(api, token, ids[index]).then(function (item) {
+                    var audios = (item && Array.isArray(item.MediaStreams))
+                        ? item.MediaStreams.filter(function (s) { return s && s.Type === "Audio"; })
+                        : [];
+                    if (audios.length === 0) {
+                        fill(index + 1);
+                        return;
+                    }
 
-            var audios = item.MediaStreams.filter(function (s) {
-                return s && s.Type === "Audio";
-            });
-            if (audios.length === 0) {
-                return;
-            }
+                    while (select.options.length > 1) {
+                        select.remove(1);
+                    }
+                    audios.forEach(function (s) {
+                        var option = document.createElement("option");
+                        option.value = s.Index;
+                        var name = s.DisplayTitle || s.Language || s.Codec || ("track " + s.Index);
+                        option.textContent = (s.Codec ? s.Codec + " \u00b7 " : "") + name + (s.Channels ? " \u00b7 " + s.Channels + "ch" : "");
+                        select.appendChild(option);
+                    });
+                });
+            };
 
-            while (select.options.length > 1) {
-                select.remove(1);
-            }
-            audios.forEach(function (s) {
-                var option = document.createElement("option");
-                option.value = s.Index;
-                var name = s.DisplayTitle || s.Language || s.Codec || ("track " + s.Index);
-                option.textContent = (s.Codec ? s.Codec + " \u00b7 " : "") + name + (s.Channels ? " \u00b7 " + s.Channels + "ch" : "");
-                select.appendChild(option);
-            });
-        }).catch(function () {
-            // Leave the Default option only.
+            fill(0);
         });
     }
 
-    function getPlayingItemId(api, token, video) {
-        // What this page plays beats the server's session list: every tab of a
-        // browser shares its DeviceId and therefore its session, whose
-        // NowPlayingItem is whichever tab reported playback last.
-        var localItemId = extractItemId(video, streamedItemId);
-        if (localItemId) {
-            return Promise.resolve(localItemId);
-        }
+    function getCandidateItemIds(api, token, video) {
+        // Ordered guesses at what this page is playing. The first two entries
+        // are this page's own (its stream urls); the session list is asked as
+        // well because a transcoded playback leaves no id in the DOM, and the
+        // route and poster then name the *series* of the playing episode. The
+        // server clips the first id that really is a video, so a plausible but
+        // wrong id in front of the right one would still win: never put a guess
+        // in front that another tab could have produced.
+        var ids = itemIdCandidates(video, streamedItemId);
 
-        // Nothing page-local to go on (unusual): guess from the session list,
-        // which cannot tell this browser's tabs apart.
         var deviceId = null;
         try {
             deviceId = (typeof api.deviceId === "function") ? api.deviceId() : null;
@@ -540,30 +591,31 @@
             }
             return response.json();
         }).then(function (sessions) {
-            if (!Array.isArray(sessions)) {
-                return null;
+            var playing = Array.isArray(sessions) ? sessions.filter(function (s) {
+                return s && s.NowPlayingItem && s.NowPlayingItem.Id
+                    && (!deviceId || s.DeviceId === deviceId);
+            }) : [];
+            var session = playing.length > 0 ? playing[0] : null;
+            if (!session) {
+                return ids;
             }
 
-            var playing = sessions.filter(function (s) {
-                return s && s.NowPlayingItem && s.NowPlayingItem.Id;
-            });
-            if (playing.length === 0) {
-                return null;
+            // Every tab of a browser shares its DeviceId, so the session holds
+            // ONE item: whichever tab reported playback last. Only a position
+            // matching this video's shows the session is this page's.
+            if (!isCurrentSession(session, video)) {
+                console.warn("[jellyclip] this browser's session belongs to another tab; ignoring it");
+                return ids;
             }
 
-            // The session of this browser. Its item may belong to another tab.
-            if (deviceId) {
-                for (var i = 0; i < playing.length; i++) {
-                    if (playing[i].DeviceId === deviceId) {
-                        console.warn("[jellyclip] no page-local item id; falling back to this browser's shared session");
-                        return playing[i].NowPlayingItem.Id;
-                    }
-                }
+            // Behind the page-local signals but in front of the route and the
+            // poster, which name a parent item while an episode is playing.
+            if (ids.indexOf(session.NowPlayingItem.Id) === -1) {
+                ids.splice(Math.min(2, ids.length), 0, session.NowPlayingItem.Id);
             }
-
-            return null;
+            return ids;
         }).catch(function () {
-            return null;
+            return ids;
         });
     }
 
@@ -636,20 +688,26 @@
 
         var token = api.accessToken ? api.accessToken() : "";
 
-        getPlayingItemId(api, token, video).then(function (itemId) {
-            if (!itemId) {
+        getCandidateItemIds(api, token, video).then(function (ids) {
+            if (!ids || ids.length === 0) {
                 setStatus(root, "Could not determine the current item id.", true);
                 return null;
             }
 
             var params = {
                 startSeconds: state.start,
-                endSeconds: state.end
+                endSeconds: state.end,
+
+                // Every id this page can name, best first: the first ones may be
+                // a parent item (the series of an episode, from the poster or the
+                // details route), and only the server knows which of them is a
+                // video with a file to clip.
+                candidates: ids.join(",")
             };
             if (state.audioStreamIndex !== null && state.audioStreamIndex !== undefined) {
                 params.audioStreamIndex = state.audioStreamIndex;
             }
-            var createUrl = api.getUrl("JellyClip/" + itemId, params);
+            var createUrl = api.getUrl("JellyClip/" + ids[0], params);
 
             setStatus(root, "Generating clip\u2026 this can take a while.");
 
@@ -1020,10 +1078,18 @@
             return;
         }
 
+        if (bar && bar.__video && bar.__video !== video) {
+            // A different video element means a different playback session: the
+            // marks of the previous one must not become this one's times.
+            state.start = null;
+            state.end = null;
+            state.audioStreamIndex = null;
+        }
+
         var built = buildIconAndPanel(video);
         built.icon.__container = container;
         built.icon.__video = video;
-        built.icon.__itemId = extractItemId(video, streamedItemId);
+        built.icon.__itemKey = playbackKey(video);
         built.icon.__panel = built.panel;
         if (slot.sibling) {
             slot.parent.insertBefore(built.icon, slot.sibling);

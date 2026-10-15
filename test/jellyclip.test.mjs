@@ -129,3 +129,52 @@ test('formatDuration renders clip length', () => {
     assert.equal(helpers.formatDuration(92), '1:32');
     assert.equal(helpers.formatDuration(3720), '62:00');
 });
+
+test('itemIdCandidates orders the page signals and drops duplicates', () => {
+    Object.defineProperty(globalThis, 'window', {
+        value: { location: { hash: '#/details?id=4b51e5beeed543e5303b32ee0d772a6d', search: '' } },
+        configurable: true
+    });
+    const video = {
+        poster: 'http://host/Items/93457ff2-9adb-77d9-3a37-2803feffc2a4/Images/Backdrop/0?tag=x',
+        currentSrc: 'http://host/Videos/83d96aec36c433796b4f1db34533b578/stream.mkv?Static=true',
+        src: ''
+    };
+    assert.deepEqual(helpers.itemIdCandidates(video, 'b518adfda59c0186013ef6e310fafcc4'), [
+        '83d96aec36c433796b4f1db34533b578',
+        'b518adfda59c0186013ef6e310fafcc4',
+        '4b51e5beeed543e5303b32ee0d772a6d',
+        '93457ff2-9adb-77d9-3a37-2803feffc2a4'
+    ]);
+    Reflect.deleteProperty(globalThis, 'window');
+});
+
+test('itemIdCandidates keeps one series id when an episode carries no stream id', () => {
+    Object.defineProperty(globalThis, 'window', {
+        value: { location: { hash: '#/details?id=4b51e5beeed543e5303b32ee0d772a6d', search: '' } },
+        configurable: true
+    });
+    // Transcoded episode started from its series page: the element plays a
+    // blob, nothing was tracked, and route and poster both name the series -
+    // the server, which only clips videos, has to walk past this id.
+    const video = {
+        poster: 'http://host/Items/4b51e5beeed543e5303b32ee0d772a6d/Images/Backdrop/0?tag=x',
+        currentSrc: 'blob:https://host/xxxx',
+        src: 'blob:https://host/xxxx'
+    };
+    assert.deepEqual(helpers.itemIdCandidates(video, null), ['4b51e5beeed543e5303b32ee0d772a6d']);
+    Reflect.deleteProperty(globalThis, 'window');
+});
+
+test('isCurrentSession accepts a session reporting this video position', () => {
+    assert.equal(helpers.isCurrentSession({ PlayState: { PositionTicks: 6130000000 } }, { currentTime: 613.4 }), true);
+    // The web client reports progress every few seconds, so lag is expected.
+    assert.equal(helpers.isCurrentSession({ PlayState: { PositionTicks: 6000000000 } }, { currentTime: 613.4 }), true);
+});
+
+test('isCurrentSession rejects the session of another tab', () => {
+    assert.equal(helpers.isCurrentSession({ PlayState: { PositionTicks: 1000000000 } }, { currentTime: 613.4 }), false);
+    assert.equal(helpers.isCurrentSession({ PlayState: {} }, { currentTime: 613.4 }), false);
+    assert.equal(helpers.isCurrentSession(null, { currentTime: 613.4 }), false);
+    assert.equal(helpers.isCurrentSession({ PlayState: { PositionTicks: 6130000000 } }, null), false);
+});

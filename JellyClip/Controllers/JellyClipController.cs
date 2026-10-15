@@ -102,23 +102,40 @@ public sealed class JellyClipController : ControllerBase
     /// <param name="startSeconds">Clip start in seconds.</param>
     /// <param name="endSeconds">Clip end in seconds.</param>
     /// <param name="audioStreamIndex">Absolute audio stream index, or <c>null</c> for the default audio track.</param>
+    /// <param name="candidates">Every item id the client can name for what is playing, best guess first.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <response code="200">Clip created.</response>
     /// <response code="400">Invalid item or time range.</response>
     /// <response code="404">Item not found.</response>
     [HttpPost("{itemId}")]
     [Authorize(Policy = Policies.Download)]
-    public async Task<ActionResult> CreateClip(string itemId, double startSeconds, double endSeconds, int? audioStreamIndex, CancellationToken cancellationToken)
+    public async Task<ActionResult> CreateClip(string itemId, double startSeconds, double endSeconds, int? audioStreamIndex, string? candidates, CancellationToken cancellationToken)
     {
-        _logger.LogInformation("Clip create requested: item {ItemId}, start {StartSeconds}s, end {EndSeconds}s, audio {AudioStreamIndex}", itemId, startSeconds, endSeconds, audioStreamIndex);
+        _logger.LogInformation("Clip create requested: item {ItemId}, start {StartSeconds}s, end {EndSeconds}s, audio {AudioStreamIndex}, candidates {Candidates}", itemId, startSeconds, endSeconds, audioStreamIndex, candidates);
 
         if (!TryValidateRange(startSeconds, endSeconds, out string rangeError))
         {
             return BadRequest(rangeError);
         }
 
-        if (!_clipService.TryResolveVideo(itemId, out Video? video, out string resolveError))
+        // The client sends every id its page can name, best first: while an
+        // episode plays, its poster and the details route name the series, and
+        // only the library knows which candidate really is a video.
+        Video? video = null;
+        string resolveError = "Invalid item id.";
+        foreach (string candidate in CandidateIds(itemId, candidates))
         {
+            if (_clipService.TryResolveVideo(candidate, out video, out resolveError))
+            {
+                break;
+            }
+
+            _logger.LogInformation("Candidate {Candidate} is not a clip-able video: {Error}", candidate, resolveError);
+        }
+
+        if (video is null)
+        {
+            _logger.LogWarning("No clip-able video among the candidates of item {ItemId}", itemId);
             return NotFound(resolveError);
         }
 
@@ -239,6 +256,33 @@ public sealed class JellyClipController : ControllerBase
             webIndexPath = _webUi.WebIndexPath,
             webIndexExists = System.IO.File.Exists(_webUi.WebIndexPath)
         });
+    }
+
+    /// <summary>
+    /// Candidate item ids to clip, best guess first: what the client reported,
+    /// then the id from the route, without duplicates.
+    /// </summary>
+    /// <param name="itemId">Item id from the route.</param>
+    /// <param name="candidates">Comma separated ids the client sent.</param>
+    private static IEnumerable<string> CandidateIds(string itemId, string? candidates)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (!string.IsNullOrWhiteSpace(candidates))
+        {
+            foreach (string candidate in candidates.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                if (seen.Add(candidate))
+                {
+                    yield return candidate;
+                }
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(itemId) && seen.Add(itemId))
+        {
+            yield return itemId;
+        }
     }
 
     private static bool TryValidateRange(double start, double end, out string error)
