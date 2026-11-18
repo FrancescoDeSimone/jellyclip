@@ -19,7 +19,6 @@
 
     var ITEM_ID = "[0-9a-fA-F]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
     var STREAM_URL_ITEM = new RegExp("/Videos/(" + ITEM_ID + ")(?:/|$)");
-    var ROUTE_ITEM = new RegExp("[?&](?:id|itemId|videoId)=(" + ITEM_ID + ")");
     var ANY_ITEM = new RegExp("\\b(" + ITEM_ID + ")\\b");
 
     // Item id carried by a stream request (`/Videos/<id>/stream…`,
@@ -37,9 +36,14 @@
     // Every item id this page can name for what it is playing, most specific
     // signal first: what the element streams, what the page requested (hls.js
     // plays from a blob: url, so transcoded playback keeps no id on the
-    // element), then the route and the poster. The latter two can name a parent
-    // (a series route, the series backdrop an episode inherits), so the server
-    // - which knows what is really a video - picks from this list.
+    // element), then the backdrop the player shows - which is the *parent* of
+    // an episode, so the server, which only clips videos, walks past it.
+    //
+    // The route is deliberately not consulted: it names the page, not the
+    // playback. Playing from a card, the next-up bar or a playlist leaves the
+    // previous item's route in place, and that id used to clip the previous
+    // episode. Nor is the whole location searched for ids: a stale query wins
+    // nothing a stream url would not win.
     function itemIdCandidates(video, streamedItemId) {
         var ids = [];
         var push = function (itemId) {
@@ -59,24 +63,11 @@
         // 2) Last stream this page asked for.
         push(streamedItemId);
 
-        var w = (typeof window !== "undefined") ? window : null;
-        var hash = w ? (w.location.hash || "") : "";
-        var search = w ? (w.location.search || "") : "";
-
-        // 3) Explicit route/view id (details page).
-        var route = hash.match(ROUTE_ITEM);
-        push(route ? route[1] : null);
-
-        // 4) Anything else the page names, poster first.
-        var texts = [video.poster || "", hash, search];
-        for (var i = 0; i < texts.length; i++) {
-            if (!texts[i]) {
-                continue;
-            }
-
-            var any = texts[i].match(ANY_ITEM);
-            push(any ? any[1] : null);
-        }
+        // 3) The backdrop the player shows. It is the *own* backdrop of a
+        // movie and the *series* backdrop of an episode, so the server, which
+        // only clips videos, walks past the parent.
+        var any = (video.poster || "").match(ANY_ITEM);
+        push(any ? any[1] : null);
 
         return ids;
     }
@@ -564,13 +555,12 @@
     }
 
     function getCandidateItemIds(api, token, video) {
-        // Ordered guesses at what this page is playing. The first two entries
-        // are this page's own (its stream urls); the session list is asked as
-        // well because a transcoded playback leaves no id in the DOM, and the
-        // route and poster then name the *series* of the playing episode. The
-        // server clips the first id that really is a video, so a plausible but
-        // wrong id in front of the right one would still win: never put a guess
-        // in front that another tab could have produced.
+        // Ordered guesses at what this page is playing. A transcoded playback
+        // leaves no id in the DOM - hls.js plays from a blob: and the backdrop
+        // names the series of an episode - so the session list is asked as
+        // well, and its item goes first when it describes this video: it is
+        // what the server sees playing, while the page's own signals can lag a
+        // playback behind.
         var ids = itemIdCandidates(video, streamedItemId);
 
         var deviceId = null;
@@ -608,10 +598,11 @@
                 return ids;
             }
 
-            // Behind the page-local signals but in front of the route and the
-            // poster, which name a parent item while an episode is playing.
+            // First, ahead of the page's own signals: the session's item is
+            // what the server sees playing at this video's position, while the
+            // page's signals can still describe the previous playback.
             if (ids.indexOf(session.NowPlayingItem.Id) === -1) {
-                ids.splice(Math.min(2, ids.length), 0, session.NowPlayingItem.Id);
+                ids.unshift(session.NowPlayingItem.Id);
             }
             return ids;
         }).catch(function () {
@@ -1080,10 +1071,12 @@
 
         if (bar && bar.__video && bar.__video !== video) {
             // A different video element means a different playback session: the
-            // marks of the previous one must not become this one's times.
+            // marks and the last stream url of the previous one must not become
+            // this one's.
             state.start = null;
             state.end = null;
             state.audioStreamIndex = null;
+            streamedItemId = null;
         }
 
         var built = buildIconAndPanel(video);

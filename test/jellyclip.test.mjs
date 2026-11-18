@@ -25,42 +25,39 @@ test('extractItemId falls back to currentSrc for direct play urls', () => {
     assert.equal(helpers.extractItemId(video), 'B3aE45f7-01aa-4d23-b456-426614174999');
 });
 
-test('extractItemId uses the hash route when the video is a blob source', () => {
-    Object.defineProperty(globalThis, 'window', {
-        value: { location: { hash: '#/details?id=abc12345-1111-2222-3333-444455556666', search: '' } },
-        configurable: true
-    });
+test('extractItemId ignores the route: it names the page, not the playback', () => {
+    // Playing from a card, the next-up bar or a playlist leaves the previous
+    // item's route in place - that id used to clip the previous episode - so a
+    // blob-only page has no item id at all.
     const video = { poster: '', currentSrc: '', src: 'blob:https://host/xxxx' };
-    assert.equal(helpers.extractItemId(video), 'abc12345-1111-2222-3333-444455556666');
-    Reflect.deleteProperty(globalThis, 'window');
+    assert.equal(helpers.extractItemId(video), null);
 });
 
 test('extractItemId handles 32-char bare hex ids (Jellyfin 10.11 format)', () => {
-    Object.defineProperty(globalThis, 'window', {
-        value: { location: { hash: '#/details?id=83d96aec36c433796b4f1db34533b578&serverId=x', search: '' } },
-        configurable: true
-    });
-    const video = { poster: '', currentSrc: '', src: 'blob:http://host/xxxx' };
+    const video = {
+        poster: 'http://host/Items/83d96aec36c433796b4f1db34533b578/Images/Backdrop/0?tag=x',
+        currentSrc: '',
+        src: 'blob:http://host/xxxx'
+    };
     assert.equal(helpers.extractItemId(video), '83d96aec36c433796b4f1db34533b578');
-    Reflect.deleteProperty(globalThis, 'window');
 
     // direct play url form
     const video2 = { poster: '', currentSrc: 'http://127.0.0.1:8096/Videos/83d96aec36c433796b4f1db34533b578/stream.mp4?Static=true', src: '' };
     assert.equal(helpers.extractItemId(video2), '83d96aec36c433796b4f1db34533b578');
 });
 
-test('extractItemId prefers the route id over a parent-series backdrop poster', () => {
+test('extractItemId reads the backdrop, never the route that is on screen', () => {
     Object.defineProperty(globalThis, 'window', {
         value: { location: { hash: '#/details?id=b518adfda59c0186013ef6e310fafcc4&serverId=50d832fa6b4549eea4306f6fffd61179', search: '' } },
         configurable: true
     });
-    // Poster points at the series (not the episode) — must NOT be picked.
+    // An episode inherits its series backdrop; the server walks past the parent.
     const video = {
-        poster: 'http://host/Items/af5d100a1111b2222c3333d4444e5555f/Images/Backdrop/0?tag=x',
+        poster: 'http://host/Items/4b51e5beeed543e5303b32ee0d772a6d/Images/Backdrop/0?tag=x',
         currentSrc: 'blob:http://host/ffff',
         src: 'blob:http://host/ffff'
     };
-    assert.equal(helpers.extractItemId(video), 'b518adfda59c0186013ef6e310fafcc4');
+    assert.equal(helpers.extractItemId(video), '4b51e5beeed543e5303b32ee0d772a6d');
     Reflect.deleteProperty(globalThis, 'window');
 });
 
@@ -83,15 +80,14 @@ test('itemIdFromStreamUrl reads the item id out of playback requests', () => {
     assert.equal(helpers.itemIdFromStreamUrl(undefined), null);
 });
 
-test('extractItemId prefers the tracked stream of this page over the route and poster', () => {
-    Object.defineProperty(globalThis, 'window', {
-        value: { location: { hash: '#/details?id=af5d100a1111b2222c3333d4444e5555f', search: '' } },
-        configurable: true
-    });
+test('extractItemId prefers the tracked stream of this page over the backdrop', () => {
     // HLS playback: element src is a blob, so only the tracked request knows.
-    const video = { poster: '', currentSrc: 'blob:https://host/xxxx', src: 'blob:https://host/xxxx' };
+    const video = {
+        poster: 'http://host/Items/4b51e5beeed543e5303b32ee0d772a6d/Images/Backdrop/0',
+        currentSrc: 'blob:https://host/xxxx',
+        src: 'blob:https://host/xxxx'
+    };
     assert.equal(helpers.extractItemId(video, 'b518adfda59c0186013ef6e310fafcc4'), 'b518adfda59c0186013ef6e310fafcc4');
-    Reflect.deleteProperty(globalThis, 'window');
 });
 
 test('extractItemId prefers the element source over a stale tracked stream', () => {
@@ -105,13 +101,13 @@ test('extractItemId prefers the element source over a stale tracked stream', () 
         '83d96aec36c433796b4f1db34533b578');
 });
 
-test('extractItemId falls back to the route when the tracked stream is unknown', () => {
+test('extractItemId returns null when only the route names an item', () => {
     Object.defineProperty(globalThis, 'window', {
         value: { location: { hash: '#/details?id=83d96aec36c433796b4f1db34533b578', search: '' } },
         configurable: true
     });
     const video = { poster: '', currentSrc: 'blob:https://host/xxxx', src: 'blob:https://host/xxxx' };
-    assert.equal(helpers.extractItemId(video, null), '83d96aec36c433796b4f1db34533b578');
+    assert.equal(helpers.extractItemId(video, null), null);
     Reflect.deleteProperty(globalThis, 'window');
 });
 
@@ -131,10 +127,6 @@ test('formatDuration renders clip length', () => {
 });
 
 test('itemIdCandidates orders the page signals and drops duplicates', () => {
-    Object.defineProperty(globalThis, 'window', {
-        value: { location: { hash: '#/details?id=4b51e5beeed543e5303b32ee0d772a6d', search: '' } },
-        configurable: true
-    });
     const video = {
         poster: 'http://host/Items/93457ff2-9adb-77d9-3a37-2803feffc2a4/Images/Backdrop/0?tag=x',
         currentSrc: 'http://host/Videos/83d96aec36c433796b4f1db34533b578/stream.mkv?Static=true',
@@ -143,10 +135,8 @@ test('itemIdCandidates orders the page signals and drops duplicates', () => {
     assert.deepEqual(helpers.itemIdCandidates(video, 'b518adfda59c0186013ef6e310fafcc4'), [
         '83d96aec36c433796b4f1db34533b578',
         'b518adfda59c0186013ef6e310fafcc4',
-        '4b51e5beeed543e5303b32ee0d772a6d',
         '93457ff2-9adb-77d9-3a37-2803feffc2a4'
     ]);
-    Reflect.deleteProperty(globalThis, 'window');
 });
 
 test('itemIdCandidates keeps one series id when an episode carries no stream id', () => {
@@ -155,8 +145,10 @@ test('itemIdCandidates keeps one series id when an episode carries no stream id'
         configurable: true
     });
     // Transcoded episode started from its series page: the element plays a
-    // blob, nothing was tracked, and route and poster both name the series -
-    // the server, which only clips videos, has to walk past this id.
+    // blob, nothing was tracked, and the backdrop names the series - the
+    // server, which only clips videos, has to walk past this id. The route
+    // names the same series here, and would have been a trap had it named the
+    // previously watched episode.
     const video = {
         poster: 'http://host/Items/4b51e5beeed543e5303b32ee0d772a6d/Images/Backdrop/0?tag=x',
         currentSrc: 'blob:https://host/xxxx',
